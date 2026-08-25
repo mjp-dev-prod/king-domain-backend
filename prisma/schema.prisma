@@ -28,3 +28,73 @@ model WaitlistEntry {
 
   @@map("waitlist_entries")
 }
+
+// ── Admin access ─────────────────────────────────────────
+
+enum AdminRole {
+  owner // can invite and revoke other admins
+  admin // read-only access to the dashboard
+}
+
+enum AdminStatus {
+  invited // invite issued, password not yet set
+  active
+  revoked
+}
+
+model AdminUser {
+  id           String      @id @default(uuid())
+  email        String      @unique
+  name         String?
+  role         AdminRole   @default(admin)
+  status       AdminStatus @default(invited)
+  passwordHash String?
+  lastLoginAt  DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  tokens   AdminToken[]
+  sessions AdminSession[]
+
+  @@map("admin_users")
+}
+
+enum AdminTokenKind {
+  invite
+  password_reset
+}
+
+/// Single-use, expiring links. Only the SHA-256 hash of the token is stored,
+/// so a database leak never yields a usable link.
+model AdminToken {
+  id        String         @id @default(uuid())
+  userId    String
+  tokenHash String         @unique
+  kind      AdminTokenKind
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime       @default(now())
+
+  user AdminUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("admin_tokens")
+}
+
+/// Server-side sessions so access can be revoked immediately, rather than
+/// waiting for a self-contained token to expire.
+model AdminSession {
+  id         String   @id @default(uuid())
+  userId     String
+  tokenHash  String   @unique
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+
+  user AdminUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("admin_sessions")
+}
