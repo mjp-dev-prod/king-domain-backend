@@ -1,0 +1,17 @@
+node_modules/
+.env
+.env.*
+!.env.example
+npm-debug.log*
+dist/
+coverage/
+.DS_Store
+data/
+
+/src/generated/prisma
+
+# Prisma's auto-installed AI agent skill docs — regenerate via `npx prisma init`
+.agents/
+.claude/
+.windsurf/
+skills-lock.json
