@@ -7,7 +7,17 @@ const nodemailer = require("nodemailer");
 const transporter =
   process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD
     ? nodemailer.createTransport({
-        service: "gmail",
+        // 587 + STARTTLS is Google's and nodemailer's own recommended config
+        // (port 465's implicit TLS is the legacy path). This also sidesteps
+        // an ENETUNREACH seen on Render: nodemailer resolves both A and AAAA
+        // records and tries IPv4 first, but if the host's IPv4 route to
+        // Gmail is the one that's actually broken, it falls through to an
+        // IPv6 address the container can't route — a different port/host
+        // pairing avoids depending on that fallback order at all.
+        host: "smtp.gmail.com",
+        port: 587,
+        secure: false,
+        requireTLS: true,
         auth: {
           user: process.env.GMAIL_USER,
           pass: process.env.GMAIL_APP_PASSWORD,
