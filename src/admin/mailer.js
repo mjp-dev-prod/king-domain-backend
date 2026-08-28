@@ -1,29 +1,43 @@
+const dns = require("node:dns");
 const nodemailer = require("nodemailer");
+
+const SMTP_HOST = "smtp.gmail.com";
+const SMTP_PORT = 587;
 
 // Gmail SMTP as a stopgap until a real domain exists to verify with a proper
 // transactional provider — this delivers to any address today, at the cost
 // of Gmail's much lower sending limits (a few hundred/day) and being tied to
 // one personal-feeling inbox rather than a branded sender.
-const transporter =
-  process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD
-    ? nodemailer.createTransport({
-        // 587 + STARTTLS is Google's and nodemailer's own recommended config
-        // (port 465's implicit TLS is the legacy path). This also sidesteps
-        // an ENETUNREACH seen on Render: nodemailer resolves both A and AAAA
-        // records and tries IPv4 first, but if the host's IPv4 route to
-        // Gmail is the one that's actually broken, it falls through to an
-        // IPv6 address the container can't route — a different port/host
-        // pairing avoids depending on that fallback order at all.
-        host: "smtp.gmail.com",
-        port: 587,
-        secure: false,
-        requireTLS: true,
-        auth: {
-          user: process.env.GMAIL_USER,
-          pass: process.env.GMAIL_APP_PASSWORD,
-        },
-      })
-    : null;
+//
+// Render's containers report an IPv6 network interface but apparently can't
+// actually route to Gmail over it. Nodemailer resolves both A and AAAA
+// records for the host and then picks ONE AT RANDOM to connect to
+// (see formatDNSValue in nodemailer's shared/index.js) — it does not
+// consistently prefer IPv4 despite ordering the combined list that way, so
+// roughly half of all send attempts hit the unreachable IPv6 address.
+// Resolving the A record ourselves and connecting to that literal IPv4
+// address sidesteps nodemailer's resolver entirely (it does no lookup of
+// its own when `host` is already an IP). `tls.servername` keeps SNI/cert
+// validation pointed at the real hostname so the TLS handshake still checks
+// out against Gmail's certificate.
+let cachedIPv4 = null;
+let cacheExpiresAt = 0;
+const IPV4_CACHE_MS = 5 * 60 * 1000;
+
+function resolveSmtpHostIPv4() {
+  return new Promise((resolve, reject) => {
+    if (cachedIPv4 && Date.now() < cacheExpiresAt) return resolve(cachedIPv4);
+
+    dns.resolve4(SMTP_HOST, (err, addresses) => {
+      if (err || !addresses?.length) return reject(err || new Error("No A record found."));
+      cachedIPv4 = addresses[0];
+      cacheExpiresAt = Date.now() + IPV4_CACHE_MS;
+      resolve(cachedIPv4);
+    });
+  });
+}
+
+const configured = Boolean(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD);
 
 const FROM = process.env.GMAIL_USER
   ? `King Domain <${process.env.GMAIL_USER}>`
@@ -35,12 +49,25 @@ const FROM = process.env.GMAIL_USER
  * resets fall back to "copy this link yourself" rather than failing.
  */
 async function send({ to, subject, html, fallbackContext }) {
-  if (!transporter) {
+  if (!configured) {
     console.log(`[mailer] GMAIL_USER/GMAIL_APP_PASSWORD not set — ${fallbackContext}`);
     return { sent: false };
   }
 
   try {
+    const ipv4Host = await resolveSmtpHostIPv4();
+    const transporter = nodemailer.createTransport({
+      host: ipv4Host,
+      port: SMTP_PORT,
+      secure: false,
+      requireTLS: true,
+      tls: { servername: SMTP_HOST },
+      auth: {
+        user: process.env.GMAIL_USER,
+        pass: process.env.GMAIL_APP_PASSWORD,
+      },
+    });
+
     await transporter.sendMail({ from: FROM, to, subject, html });
     return { sent: true };
   } catch (err) {
