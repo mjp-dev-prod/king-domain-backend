@@ -23,7 +23,6 @@
     "cookie-parser": "^1.4.7",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "nodemailer": "^9.0.6",
     "pg": "^8.23.0"
   },
   "devDependencies": {
