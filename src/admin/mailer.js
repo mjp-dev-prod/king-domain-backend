@@ -1,21 +1,37 @@
-const { Resend } = require("resend");
+const nodemailer = require("nodemailer");
 
-const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
-const FROM = process.env.RESEND_FROM || "King Domain <onboarding@resend.dev>";
+// Gmail SMTP as a stopgap until a real domain exists to verify with a proper
+// transactional provider — this delivers to any address today, at the cost
+// of Gmail's much lower sending limits (a few hundred/day) and being tied to
+// one personal-feeling inbox rather than a branded sender.
+const transporter =
+  process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD
+    ? nodemailer.createTransport({
+        service: "gmail",
+        auth: {
+          user: process.env.GMAIL_USER,
+          pass: process.env.GMAIL_APP_PASSWORD,
+        },
+      })
+    : null;
+
+const FROM = process.env.GMAIL_USER
+  ? `King Domain <${process.env.GMAIL_USER}>`
+  : "King Domain <no-reply@example.com>";
 
 /**
- * Send an email if Resend is configured; otherwise log the link so local
- * dev and any environment without RESEND_API_KEY still works — invites and
+ * Send an email if Gmail SMTP is configured; otherwise log the link so local
+ * dev and any environment without credentials still works — invites and
  * resets fall back to "copy this link yourself" rather than failing.
  */
 async function send({ to, subject, html, fallbackContext }) {
-  if (!resend) {
-    console.log(`[mailer] RESEND_API_KEY not set — ${fallbackContext}`);
+  if (!transporter) {
+    console.log(`[mailer] GMAIL_USER/GMAIL_APP_PASSWORD not set — ${fallbackContext}`);
     return { sent: false };
   }
 
   try {
-    await resend.emails.send({ from: FROM, to, subject, html });
+    await transporter.sendMail({ from: FROM, to, subject, html });
     return { sent: true };
   } catch (err) {
     console.error("mailer: send failed:", err);
