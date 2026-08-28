@@ -1,4 +1,6 @@
+require("../instrument");
 require("dotenv/config");
+const Sentry = require("@sentry/node");
 const express = require("express");
 const cookieParser = require("cookie-parser");
 const waitlist = require("./waitlist");
@@ -50,6 +52,9 @@ app.get("/waitlist/count", async (req, res) => {
 
 app.use("/admin", admin.router);
 app.use("/admin/waitlist", adminWaitlist.router);
+
+// Must be registered after all routes and before any other error middleware.
+Sentry.setupExpressErrorHandler(app);
 
 // Any unhandled route error should not leak a stack trace to the client.
 app.use((err, req, res, _next) => {
