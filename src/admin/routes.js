@@ -2,6 +2,7 @@ const express = require("express");
 const { prisma } = require("../db");
 const { rateLimit } = require("./rateLimit");
 const auth = require("./auth");
+const mailer = require("./mailer");
 
 const router = express.Router();
 
@@ -134,6 +135,106 @@ router.post(
   },
 );
 
+// ── Password reset ───────────────────────────────────────
+
+router.post(
+  "/auth/forgot-password",
+  rateLimit({ windowMs: 15 * 60 * 1000, max: 5, key: "forgot-password" }),
+  async (req, res) => {
+    const { email } = req.body ?? {};
+
+    if (typeof email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      return res.status(400).json({ error: "Enter a valid email address." });
+    }
+
+    const result = await auth.createPasswordReset(email);
+
+    if (result) {
+      const base = process.env.ADMIN_APP_URL || "http://localhost:5180";
+      await mailer.sendPasswordReset({
+        to: result.user.email,
+        resetUrl: `${base}/reset-password?token=${result.token}`,
+      });
+    }
+
+    // Identical response whether or not an account exists — otherwise this
+    // endpoint becomes a way to enumerate valid admin emails.
+    return res.json({
+      ok: true,
+      message: "If that account exists, a reset link has been sent.",
+    });
+  },
+);
+
+/** Check a reset token without consuming it, so the UI can show the email. */
+router.get(
+  "/auth/reset-password",
+  rateLimit({ windowMs: 15 * 60 * 1000, max: 20, key: "reset-check" }),
+  async (req, res) => {
+    const record = await auth.consumeToken(req.query.token, "password_reset");
+    if (!record) return res.status(400).json({ error: "This link is invalid or has expired." });
+    return res.json({ email: record.user.email });
+  },
+);
+
+router.post(
+  "/auth/reset-password",
+  rateLimit({ windowMs: 15 * 60 * 1000, max: 10, key: "reset-confirm" }),
+  async (req, res) => {
+    const { token, password } = req.body ?? {};
+
+    if (typeof password !== "string" || password.length < MIN_PASSWORD_LENGTH) {
+      return res
+        .status(400)
+        .json({ error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` });
+    }
+
+    const record = await auth.consumeToken(token, "password_reset");
+    if (!record) return res.status(400).json({ error: "This link is invalid or has expired." });
+
+    const passwordHash = await auth.hashPassword(password);
+
+    await prisma.$transaction([
+      prisma.adminToken.update({ where: { id: record.id }, data: { usedAt: new Date() } }),
+      prisma.adminUser.update({ where: { id: record.userId }, data: { passwordHash } }),
+    ]);
+
+    // A reset implies the old password may have been compromised — end
+    // every session rather than just this device's.
+    await auth.revokeAllSessions(record.userId);
+
+    return res.json({ ok: true });
+  },
+);
+
+// ── Change password (signed in) ──────────────────────────
+
+router.post("/auth/change-password", requireAdmin, async (req, res) => {
+  const { currentPassword, newPassword } = req.body ?? {};
+
+  if (typeof currentPassword !== "string" || typeof newPassword !== "string") {
+    return res.status(400).json({ error: "Current and new password are required." });
+  }
+  if (newPassword.length < MIN_PASSWORD_LENGTH) {
+    return res
+      .status(400)
+      .json({ error: `New password must be at least ${MIN_PASSWORD_LENGTH} characters.` });
+  }
+
+  const user = await prisma.adminUser.findUnique({ where: { id: req.admin.id } });
+  if (!user?.passwordHash || !(await auth.verifyPassword(user.passwordHash, currentPassword))) {
+    return res.status(401).json({ error: "Current password is incorrect." });
+  }
+
+  const passwordHash = await auth.hashPassword(newPassword);
+  await prisma.adminUser.update({ where: { id: user.id }, data: { passwordHash } });
+
+  // Keep the session that just made this request; end any others.
+  await auth.revokeAllSessions(user.id, req.sessionId);
+
+  return res.json({ ok: true });
+});
+
 // ── Admin management (owner only) ────────────────────────
 
 router.get("/admins", requireAdmin, requireOwner, async (req, res) => {
@@ -157,12 +258,22 @@ router.post("/admins/invite", requireAdmin, requireOwner, async (req, res) => {
     role: role ?? "admin",
   });
 
-  const base = process.env.ADMIN_APP_URL || "http://localhost:5174";
+  const base = process.env.ADMIN_APP_URL || "http://localhost:5180";
+  const inviteUrl = `${base}/accept-invite?token=${token}`;
+
+  const mailResult = await mailer.sendInvite({
+    to: user.email,
+    inviteUrl,
+    expiresInHours: auth.INVITE_TTL_HOURS,
+  });
+
   return res.status(201).json({
     admin: publicUser(user),
-    // Delivered manually for now — no email provider wired up yet.
-    inviteUrl: `${base}/accept-invite?token=${token}`,
+    // Still returned even when emailed — useful for copy/paste while the
+    // shared testing domain can't deliver to arbitrary addresses.
+    inviteUrl,
     expiresInHours: auth.INVITE_TTL_HOURS,
+    emailed: mailResult.sent,
   });
 });
 

@@ -3,6 +3,7 @@ const argon2 = require("argon2");
 const { prisma } = require("../db");
 
 const INVITE_TTL_HOURS = 72;
+const RESET_TTL_HOURS = 1;
 const SESSION_TTL_DAYS = 7;
 const SESSION_COOKIE = "kd_admin_session";
 
@@ -100,6 +101,40 @@ async function consumeToken(rawToken, kind) {
   return record;
 }
 
+// ── Password reset ───────────────────────────────────────
+
+/**
+ * Issue a single-use, 1h password reset token for an active admin.
+ * Returns null for accounts that shouldn't get one (missing, invited,
+ * revoked) — callers must give the same response either way, so an
+ * attacker can't use this to enumerate which emails have accounts.
+ */
+async function createPasswordReset(email) {
+  const user = await prisma.adminUser.findUnique({
+    where: { email: email.trim().toLowerCase() },
+  });
+
+  if (!user || user.status !== "active") return null;
+
+  // Outstanding reset tokens become unusable once a new one is issued.
+  await prisma.adminToken.updateMany({
+    where: { userId: user.id, kind: "password_reset", usedAt: null },
+    data: { usedAt: new Date() },
+  });
+
+  const token = generateToken();
+  await prisma.adminToken.create({
+    data: {
+      userId: user.id,
+      tokenHash: hashToken(token),
+      kind: "password_reset",
+      expiresAt: new Date(Date.now() + RESET_TTL_HOURS * 3600 * 1000),
+    },
+  });
+
+  return { user, token };
+}
+
 // ── Sessions ─────────────────────────────────────────────
 
 async function createSession(userId, userAgent) {
@@ -146,6 +181,22 @@ async function revokeSession(rawToken) {
     .catch(() => {});
 }
 
+/**
+ * Kill every active session for a user. Used on password change/reset so a
+ * credential compromise (old password known, or a reset link) can't be
+ * combined with a still-live session elsewhere.
+ */
+async function revokeAllSessions(userId, exceptSessionId) {
+  await prisma.adminSession.updateMany({
+    where: {
+      userId,
+      revokedAt: null,
+      ...(exceptSessionId ? { id: { not: exceptSessionId } } : {}),
+    },
+    data: { revokedAt: new Date() },
+  });
+}
+
 // ── Cookie ───────────────────────────────────────────────
 
 function sessionCookieOptions() {
@@ -164,14 +215,17 @@ function sessionCookieOptions() {
 module.exports = {
   SESSION_COOKIE,
   INVITE_TTL_HOURS,
+  RESET_TTL_HOURS,
   generateToken,
   hashToken,
   hashPassword,
   verifyPassword,
   createInvite,
+  createPasswordReset,
   consumeToken,
   createSession,
   resolveSession,
   revokeSession,
+  revokeAllSessions,
   sessionCookieOptions,
 };
