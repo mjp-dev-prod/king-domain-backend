@@ -56,6 +56,12 @@ model AdminUser {
   tokens   AdminToken[]
   sessions AdminSession[]
 
+  decisionsCreated     Decision[]             @relation("DecisionsCreated")
+  decisionsClosed      Decision[]             @relation("DecisionsClosed")
+  decisionStances      DecisionStance[]
+  decisionComments     DecisionComment[]
+  pendingNotifications PendingNotification[]
+
   @@map("admin_users")
 }
 
@@ -97,4 +103,92 @@ model AdminSession {
 
   @@index([userId])
   @@map("admin_sessions")
+}
+
+// ── Shareholder decisions ────────────────────────────────
+
+enum DecisionStatus {
+  open
+  closed
+}
+
+enum Stance {
+  agree
+  disagree
+  need_discussion
+}
+
+/// A decision Samuel (or another owner) puts in front of the other
+/// shareholders. Owner-only to create — this is a structured async
+/// discussion tool, not a proposal system; see docs/features/
+/// shareholder-decisions.md in king-domain-mobile for the full rationale.
+model Decision {
+  id           String         @id @default(uuid())
+  title        String
+  description  String
+  /// Free string like "01", "02" — an optional pointer into the Marketplace
+  /// Decision Ledger artifact's milestone numbering. Not a foreign key: the
+  /// ledger lives in an artifact, not this database.
+  milestoneRef String?
+  status       DecisionStatus @default(open)
+  createdById  String
+  createdBy    AdminUser      @relation("DecisionsCreated", fields: [createdById], references: [id])
+  createdAt    DateTime       @default(now())
+  closedAt     DateTime?
+  /// Set alongside closedAt/reopening so "who closed/reopened this, when" is
+  /// visible without diffing audit logs.
+  closedById   String?
+  closedBy     AdminUser?     @relation("DecisionsClosed", fields: [closedById], references: [id])
+
+  stances              DecisionStance[]
+  comments             DecisionComment[]
+  pendingNotifications PendingNotification[]
+
+  @@map("decisions")
+}
+
+/// One stance per person per decision — casting again updates it in place
+/// rather than creating a new row, so the current position is always a
+/// single lookup, not "most recent by createdAt".
+model DecisionStance {
+  id         String   @id @default(uuid())
+  decisionId String
+  decision   Decision @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+  userId     String
+  user       AdminUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  stance     Stance
+  updatedAt  DateTime @updatedAt
+
+  @@unique([decisionId, userId])
+  @@map("decision_stances")
+}
+
+model DecisionComment {
+  id         String   @id @default(uuid())
+  decisionId String
+  decision   Decision @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+  userId     String
+  user       AdminUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  body       String
+  createdAt  DateTime @default(now())
+
+  @@index([decisionId])
+  @@map("decision_comments")
+}
+
+/// Queues a comment-notification for one (decision, recipient) pair so a
+/// burst of comments collapses into a single digest email rather than one
+/// per comment. A scheduled job drains rows older than the delay window
+/// (see src/admin/notifications.js) and deletes them once sent.
+model PendingNotification {
+  id             String   @id @default(uuid())
+  decisionId     String
+  decision       Decision @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+  recipientId    String
+  recipient      AdminUser @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  commentCount   Int      @default(1)
+  firstQueuedAt  DateTime @default(now())
+
+  @@unique([decisionId, recipientId])
+  @@map("pending_notifications")
 }
