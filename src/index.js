@@ -6,6 +6,8 @@ const cookieParser = require("cookie-parser");
 const waitlist = require("./waitlist");
 const admin = require("./admin/routes");
 const adminWaitlist = require("./admin/waitlistRoutes");
+const adminDecisions = require("./admin/decisionRoutes");
+const { startNotificationScheduler } = require("./admin/notifications");
 
 const app = express();
 const port = process.env.PORT || 4000;
@@ -52,6 +54,7 @@ app.get("/waitlist/count", async (req, res) => {
 
 app.use("/admin", admin.router);
 app.use("/admin/waitlist", adminWaitlist.router);
+app.use("/admin/decisions", adminDecisions.router);
 
 // Must be registered after all routes and before any other error middleware.
 Sentry.setupExpressErrorHandler(app);
@@ -64,4 +67,5 @@ app.use((err, req, res, _next) => {
 
 app.listen(port, () => {
   console.log(`King Domain backend listening on port ${port}`);
+  startNotificationScheduler();
 });

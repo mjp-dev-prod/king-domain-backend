@@ -82,4 +82,35 @@ function sendInvite({ to, inviteUrl, expiresInHours }) {
   });
 }
 
-module.exports = { sendPasswordReset, sendInvite };
+function sendNewDecisionNotice({ to, decision }) {
+  const base = process.env.ADMIN_APP_URL || "http://localhost:5180";
+  const url = `${base}/decisions/${decision.id}`;
+  return send({
+    to,
+    subject: `New decision: ${decision.title}`,
+    html: `
+      <p>A new decision has been posted for review.</p>
+      <p><strong>${decision.title}</strong></p>
+      <p>${decision.description}</p>
+      <p><a href="${url}">View and respond</a></p>
+    `,
+    fallbackContext: `new decision notice for ${to}: ${url}`,
+  });
+}
+
+function sendCommentDigest({ to, decisionTitle, decisionId, commentCount }) {
+  const base = process.env.ADMIN_APP_URL || "http://localhost:5180";
+  const url = `${base}/decisions/${decisionId}`;
+  const plural = commentCount === 1 ? "comment" : "comments";
+  return send({
+    to,
+    subject: `${commentCount} new ${plural} on "${decisionTitle}"`,
+    html: `
+      <p>${commentCount} new ${plural} on <strong>${decisionTitle}</strong> since you last checked — you haven't cast a stance on this one yet.</p>
+      <p><a href="${url}">View the discussion</a></p>
+    `,
+    fallbackContext: `comment digest for ${to}: ${url}`,
+  });
+}
+
+module.exports = { sendPasswordReset, sendInvite, sendNewDecisionNotice, sendCommentDigest };
