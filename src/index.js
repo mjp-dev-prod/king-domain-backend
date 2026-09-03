@@ -8,6 +8,7 @@ const admin = require("./admin/routes");
 const adminWaitlist = require("./admin/waitlistRoutes");
 const adminDecisions = require("./admin/decisionRoutes");
 const { startNotificationScheduler } = require("./admin/notifications");
+const mcpAdmin = require("./mcp-admin/mcp-admin.routes");
 
 const app = express();
 const port = process.env.PORT || 4000;
@@ -55,6 +56,7 @@ app.get("/waitlist/count", async (req, res) => {
 app.use("/admin", admin.router);
 app.use("/admin/waitlist", adminWaitlist.router);
 app.use("/admin/decisions", adminDecisions.router);
+app.use("/api/mcp-admin", mcpAdmin.router);
 
 // Must be registered after all routes and before any other error middleware.
 Sentry.setupExpressErrorHandler(app);

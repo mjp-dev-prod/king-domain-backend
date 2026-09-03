@@ -193,3 +193,25 @@ model PendingNotification {
   @@unique([decisionId, recipientId])
   @@map("pending_notifications")
 }
+
+// ── MCP admin audit trail ────────────────────────────────
+
+/// Durable record of every tier-2/3 call made through the /api/mcp-admin/*
+/// namespace (see king-domain-admin-mcp). Deliberately a database table, not
+/// a local file — local-file logs are invisible to other shareholders and
+/// disappear if Samuel switches machines, and these actions (creating a
+/// decision on someone's behalf, revoking an admin) deserve a durable,
+/// shared record.
+model McpAuditLog {
+  id         String   @id @default(uuid())
+  tool       String
+  tier       Int
+  method     String
+  path       String
+  args       Json?
+  statusCode Int
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("mcp_audit_logs")
+}
