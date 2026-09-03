@@ -60,6 +60,17 @@ const detailInclude = {
   comments: { include: { user: true }, orderBy: { createdAt: "asc" } },
 };
 
+const PAGE_SIZE = 20;
+
+function buildWhere(query) {
+  const where = {};
+  if (query.status === "open" || query.status === "closed") where.status = query.status;
+  if (typeof query.milestoneRef === "string" && query.milestoneRef) {
+    where.milestoneRef = query.milestoneRef;
+  }
+  return where;
+}
+
 /** Queue (or bump) a comment-notification digest row for one recipient. */
 async function queueCommentNotification(decisionId, recipientId) {
   await prisma.pendingNotification.upsert({
@@ -72,11 +83,27 @@ async function queueCommentNotification(decisionId, recipientId) {
 // ── List / detail / create ───────────────────────────────
 
 router.get("/", async (req, res) => {
-  const decisions = await prisma.decision.findMany({
-    include: listInclude,
-    orderBy: { createdAt: "desc" },
+  const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+  const where = buildWhere(req.query);
+
+  const [total, decisions] = await Promise.all([
+    prisma.decision.count({ where }),
+    prisma.decision.findMany({
+      where,
+      include: listInclude,
+      orderBy: { createdAt: "desc" },
+      skip: (page - 1) * PAGE_SIZE,
+      take: PAGE_SIZE,
+    }),
+  ]);
+
+  return res.json({
+    decisions: decisions.map(serializeDecision),
+    page,
+    pageSize: PAGE_SIZE,
+    total,
+    pages: Math.max(1, Math.ceil(total / PAGE_SIZE)),
   });
-  return res.json({ decisions: decisions.map(serializeDecision) });
 });
 
 router.get("/:id", async (req, res) => {
