@@ -7,6 +7,8 @@ const waitlist = require("./waitlist");
 const admin = require("./admin/routes");
 const adminWaitlist = require("./admin/waitlistRoutes");
 const adminDecisions = require("./admin/decisionRoutes");
+const adminAppReleases = require("./admin/appReleaseRoutes");
+const appRoutes = require("./app/appRoutes");
 const { startNotificationScheduler } = require("./admin/notifications");
 const mcpAdmin = require("./mcp-admin/mcp-admin.routes");
 
@@ -56,6 +58,8 @@ app.get("/waitlist/count", async (req, res) => {
 app.use("/admin", admin.router);
 app.use("/admin/waitlist", adminWaitlist.router);
 app.use("/admin/decisions", adminDecisions.router);
+app.use("/admin/app-releases", adminAppReleases.router);
+app.use("/app", appRoutes.router);
 app.use("/api/mcp-admin", mcpAdmin.router);
 
 // Must be registered after all routes and before any other error middleware.

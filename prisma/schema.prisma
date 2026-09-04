@@ -215,3 +215,47 @@ model McpAuditLog {
   @@index([createdAt])
   @@map("mcp_audit_logs")
 }
+
+// ── Mobile app releases ──────────────────────────────────
+
+enum AppReleaseStatus {
+  draft
+  published
+}
+
+/// Direct-APK distribution for internal testing (no Play Store yet — see
+/// king-domain-mobile/codemagic.yaml). Pattern ported from pendu's
+/// AppRelease model, including the deliberate split between
+/// `forceUpdateRequested` and `forceUpdate`: a real pendu incident (2026-07-31)
+/// showed that activating force-update the instant a build is uploaded can
+/// lock users out before anyone has actually verified the build installs
+/// correctly. `forceUpdateRequested` is just the admin's authored intent at
+/// draft time; `forceUpdate` is the live flag the app actually reads, and it
+/// is ONLY ever set by a separate, explicit activate-force-update call —
+/// publishing a release never flips it, even if requested.
+model AppRelease {
+  id          String           @id @default(uuid())
+  version     String           @unique
+  /// Supabase Storage public/signed URL for the built APK. Null until a
+  /// human uploads it (CI uploads the file; publishing sets this field).
+  apkUrl      String?
+  /// Structured as { highlights: string[], improvements: string[], fixes: string[] }.
+  changelog   Json?
+  status      AppReleaseStatus @default(draft)
+  /// Single-row "pointer" — exactly one release has this true at a time,
+  /// enforced in the publish route, not a DB constraint.
+  isLatest    Boolean          @default(false)
+  /// The live flag the app's version-check endpoint returns. See model doc.
+  forceUpdate Boolean          @default(false)
+  /// The admin's original intent, set at draft creation. Never touched by
+  /// publish — lets the dashboard show "wants force update, not yet
+  /// activated" so nothing is silently forgotten.
+  forceUpdateRequested Boolean @default(false)
+  minVersion  String           @default("1.0.0")
+  createdAt   DateTime         @default(now())
+  publishedAt DateTime?
+  forceUpdateActivatedAt DateTime?
+
+  @@index([status, isLatest])
+  @@map("app_releases")
+}
