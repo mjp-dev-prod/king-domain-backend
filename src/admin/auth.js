@@ -5,7 +5,6 @@ const { prisma } = require("../db");
 const INVITE_TTL_HOURS = 72;
 const RESET_TTL_HOURS = 1;
 const SESSION_TTL_DAYS = 7;
-const SESSION_COOKIE = "kd_admin_session";
 
 // ── Token helpers ────────────────────────────────────────
 
@@ -135,11 +134,16 @@ async function createPasswordReset(email) {
   return { user, token };
 }
 
-// ── Sessions ─────────────────────────────────────────────
+// ── Refresh tokens ───────────────────────────────────────
+//
+// AdminSession now stores the refresh token (not a cookie session token) —
+// see the model's schema comment and src/admin/jwt.js. "Session" in these
+// function names refers to the underlying login session concept, which is
+// still exactly right; only the transport changed.
 
 async function createSession(userId, userAgent) {
   const token = generateToken();
-  await prisma.adminSession.create({
+  const session = await prisma.adminSession.create({
     data: {
       userId,
       tokenHash: hashToken(token),
@@ -147,9 +151,10 @@ async function createSession(userId, userAgent) {
       userAgent: userAgent?.slice(0, 255),
     },
   });
-  return token;
+  return { refreshToken: token, sessionId: session.id };
 }
 
+/** Look up a live refresh token. Returns the session + user, or null. */
 async function resolveSession(rawToken) {
   if (typeof rawToken !== "string" || !rawToken) return null;
 
@@ -167,6 +172,27 @@ async function resolveSession(rawToken) {
   prisma.adminSession
     .update({ where: { id: session.id }, data: { lastSeenAt: new Date() } })
     .catch(() => {});
+
+  return session;
+}
+
+/**
+ * Look up a refresh session by its id (the access token's `sessionId`
+ * claim) rather than the raw token — used by requireAdmin, which only ever
+ * sees the access token, never the refresh token itself.
+ */
+async function resolveSessionById(sessionId) {
+  if (!sessionId) return null;
+
+  const session = await prisma.adminSession.findUnique({
+    where: { id: sessionId },
+    include: { user: true },
+  });
+
+  if (!session) return null;
+  if (session.revokedAt) return null;
+  if (session.expiresAt < new Date()) return null;
+  if (session.user.status !== "active") return null;
 
   return session;
 }
@@ -197,25 +223,10 @@ async function revokeAllSessions(userId, exceptSessionId) {
   });
 }
 
-// ── Cookie ───────────────────────────────────────────────
-
-function sessionCookieOptions() {
-  const crossSite = process.env.ADMIN_COOKIE_CROSS_SITE === "true";
-  return {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    // The admin UI is deployed on a different origin to the API, so the
-    // cookie has to survive a cross-site request.
-    sameSite: crossSite ? "none" : "lax",
-    maxAge: SESSION_TTL_DAYS * 86400 * 1000,
-    path: "/",
-  };
-}
-
 module.exports = {
-  SESSION_COOKIE,
   INVITE_TTL_HOURS,
   RESET_TTL_HOURS,
+  SESSION_TTL_DAYS,
   generateToken,
   hashToken,
   hashPassword,
@@ -225,7 +236,7 @@ module.exports = {
   consumeToken,
   createSession,
   resolveSession,
+  resolveSessionById,
   revokeSession,
   revokeAllSessions,
-  sessionCookieOptions,
 };

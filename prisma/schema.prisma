@@ -87,8 +87,12 @@ model AdminToken {
   @@map("admin_tokens")
 }
 
-/// Server-side sessions so access can be revoked immediately, rather than
-/// waiting for a self-contained token to expire.
+/// Refresh-token store (not a cookie session — see src/admin/jwt.js). The
+/// short-lived JWT access token (15 min) is stateless and self-contained;
+/// this table is what's actually revocable, and every /admin/auth/refresh
+/// call re-checks revokedAt/expiresAt here before minting a new access
+/// token, so revocation still takes effect within one access-token
+/// lifetime even though the access token itself can't be revoked directly.
 model AdminSession {
   id         String   @id @default(uuid())
   userId     String

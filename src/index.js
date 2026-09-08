@@ -2,7 +2,6 @@ require("../instrument");
 require("dotenv/config");
 const Sentry = require("@sentry/node");
 const express = require("express");
-const cookieParser = require("cookie-parser");
 const waitlist = require("./waitlist");
 const admin = require("./admin/routes");
 const adminWaitlist = require("./admin/waitlistRoutes");
@@ -32,10 +31,11 @@ app.use((req, res, next) => {
   if (origin && allowedOrigins.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
-    res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-    // The admin app sends its session cookie from a different origin.
-    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
+    // Authorization carries the JWT access token now — auth moved off
+    // cookies entirely (Safari/iOS rejected the cross-site session cookie
+    // in production; see admin/jwt.js). No credentials/cookie flag needed.
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   }
 
   if (req.method === "OPTIONS") return res.sendStatus(204);
@@ -43,7 +43,6 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
-app.use(cookieParser());
 
 app.get("/health", (req, res) => {
   res.json({ status: "ok" });

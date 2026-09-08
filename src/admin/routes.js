@@ -3,6 +3,7 @@ const { prisma } = require("../db");
 const { rateLimit } = require("./rateLimit");
 const auth = require("./auth");
 const mailer = require("./mailer");
+const jwtUtil = require("./jwt");
 
 const router = express.Router();
 
@@ -10,12 +11,41 @@ const MIN_PASSWORD_LENGTH = 12;
 
 // ── Middleware ───────────────────────────────────────────
 
+/**
+ * Verifies the access token from the Authorization header. Does NOT hit the
+ * DB for the common case — the JWT itself carries the user's id/role, and
+ * is trusted for its 15-minute lifetime. The one DB check (via sessionId)
+ * confirms the underlying refresh session hasn't been revoked/expired since
+ * the access token was minted, so a revoke (password change, admin removal)
+ * still takes effect within 15 minutes rather than only at next refresh.
+ */
 async function requireAdmin(req, res, next) {
-  const session = await auth.resolveSession(req.cookies?.[auth.SESSION_COOKIE]);
+  const header = req.headers.authorization;
+  if (!header?.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Not signed in." });
+  }
+
+  let claims;
+  try {
+    claims = jwtUtil.verifyAccessToken(header.slice("Bearer ".length));
+  } catch {
+    return res.status(401).json({ error: "Not signed in." });
+  }
+
+  const session = await auth.resolveSessionById(claims.sessionId);
   if (!session) return res.status(401).json({ error: "Not signed in." });
+
   req.admin = session.user;
   req.sessionId = session.id;
   next();
+}
+
+/** Mints the access/refresh token pair for a freshly-authenticated user. */
+async function issueTokens(userId, userAgent) {
+  const { refreshToken, sessionId } = await auth.createSession(userId, userAgent);
+  const user = await prisma.adminUser.findUnique({ where: { id: userId } });
+  const accessToken = jwtUtil.generateAccessToken(user, sessionId);
+  return { accessToken, refreshToken, expiresIn: jwtUtil.ACCESS_TOKEN_TTL_SECONDS };
 }
 
 function requireOwner(req, res, next) {
@@ -60,20 +90,41 @@ router.post(
     if (!user || user.status !== "active" || !user.passwordHash) return invalid();
     if (!(await auth.verifyPassword(user.passwordHash, password))) return invalid();
 
-    const token = await auth.createSession(user.id, req.get("user-agent"));
+    const tokens = await issueTokens(user.id, req.get("user-agent"));
     await prisma.adminUser.update({
       where: { id: user.id },
       data: { lastLoginAt: new Date() },
     });
 
-    res.cookie(auth.SESSION_COOKIE, token, auth.sessionCookieOptions());
-    return res.json({ user: publicUser(user) });
+    return res.json({ user: publicUser(user), ...tokens });
+  },
+);
+
+/**
+ * Exchanges a still-valid refresh token for a new access token. Called
+ * automatically by the frontend on a 401, not by the user directly — see
+ * king-domain-admin/src/lib/api.ts's response interceptor.
+ */
+router.post(
+  "/auth/refresh",
+  rateLimit({ windowMs: 15 * 60 * 1000, max: 30, key: "refresh" }),
+  async (req, res) => {
+    const { refreshToken } = req.body ?? {};
+    if (typeof refreshToken !== "string" || !refreshToken) {
+      return res.status(400).json({ error: "Refresh token is required." });
+    }
+
+    const session = await auth.resolveSession(refreshToken);
+    if (!session) return res.status(401).json({ error: "Refresh token is invalid or expired." });
+
+    const accessToken = jwtUtil.generateAccessToken(session.user, session.id);
+    return res.json({ accessToken, expiresIn: jwtUtil.ACCESS_TOKEN_TTL_SECONDS });
   },
 );
 
 router.post("/auth/logout", async (req, res) => {
-  await auth.revokeSession(req.cookies?.[auth.SESSION_COOKIE]);
-  res.clearCookie(auth.SESSION_COOKIE, { ...auth.sessionCookieOptions(), maxAge: undefined });
+  const { refreshToken } = req.body ?? {};
+  await auth.revokeSession(refreshToken);
   return res.json({ ok: true });
 });
 
@@ -129,9 +180,8 @@ router.post(
       }),
     ]);
 
-    const sessionToken = await auth.createSession(user.id, req.get("user-agent"));
-    res.cookie(auth.SESSION_COOKIE, sessionToken, auth.sessionCookieOptions());
-    return res.json({ user: publicUser(user) });
+    const tokens = await issueTokens(user.id, req.get("user-agent"));
+    return res.json({ user: publicUser(user), ...tokens });
   },
 );
 
