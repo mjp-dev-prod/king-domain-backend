@@ -279,4 +279,4 @@ router.delete("/me/proof-items/:id", requireUser, requireTalentProfile, async (r
   return res.json({ ok: true });
 });
 
-module.exports = { router, requireUser };
+module.exports = { router, requireUser, requireTalentProfile };

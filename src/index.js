@@ -4,6 +4,7 @@ const Sentry = require("@sentry/node");
 const express = require("express");
 const waitlist = require("./waitlist");
 const user = require("./user/routes");
+const userJobs = require("./user/jobsRoutes");
 const admin = require("./admin/routes");
 const adminWaitlist = require("./admin/waitlistRoutes");
 const adminDecisions = require("./admin/decisionRoutes");
@@ -57,6 +58,7 @@ app.get("/waitlist/count", async (req, res) => {
 });
 
 app.use("/users", user.router);
+app.use("/jobs", userJobs.router);
 app.use("/admin", admin.router);
 app.use("/admin/waitlist", adminWaitlist.router);
 app.use("/admin/decisions", adminDecisions.router);
