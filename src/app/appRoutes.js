@@ -4,9 +4,11 @@ const { prisma } = require("../db");
 const { uploadApk } = require("../storage");
 
 const router = express.Router();
-// Matches the app-releases Supabase Storage bucket's own 50MB file-size
-// limit (the project's free tier caps it there) — keep these in sync.
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+// APKs now upload to Cloudflare R2 (storage.js), not Supabase Storage — R2's
+// free tier has no per-file size limit (10GB total, whole-project). This
+// ceiling is just a sanity check against a mistaken/abusive upload, not a
+// real infra constraint; raise it further if a real build ever exceeds it.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 150 * 1024 * 1024 } });
 
 /** What the mobile app polls at launch/resume to check for updates. */
 router.get("/version", async (req, res) => {

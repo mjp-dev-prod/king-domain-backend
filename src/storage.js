@@ -1,4 +1,5 @@
 const { createClient } = require("@supabase/supabase-js");
+const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 
 // Server-side only — the service role key bypasses row-level security, so
 // this client must never be exposed to the admin frontend or the mobile app.
@@ -8,35 +9,56 @@ const supabase = configured
   ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
   : null;
 
-const APK_BUCKET = "app-releases";
 const PROOF_ITEMS_BUCKET = "proof-items";
 const DELIVERABLES_BUCKET = "deliverables";
 
+// APKs moved off Supabase Storage to Cloudflare R2 — Supabase's free tier
+// caps individual file uploads at 50MB project-wide, and King Domain's
+// first real release build came in at 50.19MB, over that cap (confirmed by
+// a real production upload failure, not a preemptive guess). R2's free
+// tier has no per-file size limit and no egress fees, so APK downloads by
+// end users cost nothing either.
+const r2Configured = Boolean(
+  process.env.R2_ACCOUNT_ID && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY,
+);
+const r2 = r2Configured
+  ? new S3Client({
+      region: "auto",
+      endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      credentials: {
+        accessKeyId: process.env.R2_ACCESS_KEY_ID,
+        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+      },
+    })
+  : null;
+const R2_BUCKET = process.env.R2_APK_BUCKET || "king-domain-releases";
+
 /**
- * Upload an APK buffer to the app-releases bucket and return its public URL.
- * Overwrites any existing object at the same path (CI re-uploading the same
- * version is treated as replacing a bad build, not an error).
+ * Upload an APK buffer to Cloudflare R2 and return its public URL.
+ * Overwrites any existing object at the same key (CI re-uploading the same
+ * version is treated as replacing a bad build, not an error — R2's
+ * PutObjectCommand overwrites by default, no explicit upsert flag needed).
  */
 async function uploadApk({ version, buffer }) {
-  if (!supabase) {
-    throw new Error("Supabase Storage is not configured — set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.");
+  if (!r2) {
+    throw new Error("R2 is not configured — set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY.");
   }
 
-  const path = `king-domain-${version}.apk`;
+  const key = `king-domain-${version}.apk`;
 
-  const { error: uploadError } = await supabase.storage
-    .from(APK_BUCKET)
-    .upload(path, buffer, {
-      contentType: "application/vnd.android.package-archive",
-      upsert: true,
-    });
+  await r2.send(
+    new PutObjectCommand({
+      Bucket: R2_BUCKET,
+      Key: key,
+      Body: buffer,
+      ContentType: "application/vnd.android.package-archive",
+    }),
+  );
 
-  if (uploadError) {
-    throw new Error(`Supabase upload failed: ${uploadError.message}`);
+  if (!process.env.R2_PUBLIC_URL) {
+    throw new Error("R2_PUBLIC_URL is not set — required to build a downloadable APK URL.");
   }
-
-  const { data } = supabase.storage.from(APK_BUCKET).getPublicUrl(path);
-  return data.publicUrl;
+  return `${process.env.R2_PUBLIC_URL}/${key}`;
 }
 
 /**
@@ -115,4 +137,5 @@ module.exports = {
   uploadDeliverableFile,
   getDeliverableFileSignedUrl,
   storageConfigured: configured,
+  r2Configured,
 };
