@@ -3,10 +3,13 @@ require("dotenv/config");
 const Sentry = require("@sentry/node");
 const express = require("express");
 const waitlist = require("./waitlist");
+const user = require("./user/routes");
+const userJobs = require("./user/jobsRoutes");
 const admin = require("./admin/routes");
 const adminWaitlist = require("./admin/waitlistRoutes");
 const adminDecisions = require("./admin/decisionRoutes");
 const adminAppReleases = require("./admin/appReleaseRoutes");
+const adminProofReview = require("./admin/proofReviewRoutes");
 const appRoutes = require("./app/appRoutes");
 const { startNotificationScheduler } = require("./admin/notifications");
 const mcpAdmin = require("./mcp-admin/mcp-admin.routes");
@@ -54,10 +57,13 @@ app.get("/waitlist/count", async (req, res) => {
   res.json({ count: await waitlist.count() });
 });
 
+app.use("/users", user.router);
+app.use("/jobs", userJobs.router);
 app.use("/admin", admin.router);
 app.use("/admin/waitlist", adminWaitlist.router);
 app.use("/admin/decisions", adminDecisions.router);
 app.use("/admin/app-releases", adminAppReleases.router);
+app.use("/admin/proof-items", adminProofReview.router);
 app.use("/app", appRoutes.router);
 app.use("/api/mcp-admin", mcpAdmin.router);
 
