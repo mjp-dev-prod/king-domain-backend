@@ -38,6 +38,14 @@ function publicAdmin(user) {
   return { id: user.id, name: user.name, email: user.email, role: user.role, status: user.status };
 }
 
+/** Same rule as appReleaseRoutes.js's POST / — at least one changelog entry across the three buckets. */
+function isValidChangelog(changelog) {
+  if (!changelog || typeof changelog !== "object") return false;
+  const buckets = ["highlights", "improvements", "fixes"];
+  const total = buckets.reduce((sum, key) => sum + (Array.isArray(changelog[key]) ? changelog[key].length : 0), 0);
+  return total > 0;
+}
+
 function serializeDecision(decision) {
   const stanceCounts = { agree: 0, disagree: 0, need_discussion: 0 };
   for (const s of decision.stances) stanceCounts[s.stance] += 1;
@@ -274,6 +282,65 @@ router.post("/decisions/:id/close", async (req, res) => {
   });
 
   return res.json({ decision: serializeDecision(updated) });
+});
+
+// ── App releases (tier 1: read) ───────────────────────────
+
+router.get("/app-releases", async (req, res) => {
+  const releases = await prisma.appRelease.findMany({ orderBy: { createdAt: "desc" } });
+  return res.json({ releases });
+});
+
+// ── App releases (tier 2: scoped writes) ──────────────────
+
+/**
+ * Drafts a new app release — same validation and defaults as the
+ * dashboard's POST /admin/app-releases (appReleaseRoutes.js). Does NOT
+ * build or upload an APK: that still only happens through Codemagic CI
+ * fetching this draft via GET /app/release/pending and uploading the
+ * built artifact. Publishing is a separate, deliberate dashboard action
+ * taken after manually confirming the build installs and runs — not
+ * exposed here, on purpose, same as the dashboard's own design intent.
+ */
+router.post("/app-releases", async (req, res) => {
+  const { version, changelog, forceUpdate, minVersion, onBehalfOfEmail } = req.body ?? {};
+
+  const actor = await resolveActingAdmin(onBehalfOfEmail);
+  if (!actor || actor.role !== "owner") {
+    return res.status(400).json({
+      error: "onBehalfOfEmail must be the email of an active owner-role admin.",
+    });
+  }
+
+  if (typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version.trim())) {
+    return res.status(400).json({ error: "Version must be a semver string like 1.2.3." });
+  }
+  if (!isValidChangelog(changelog)) {
+    return res.status(400).json({ error: "Changelog needs at least one highlight, improvement, or fix." });
+  }
+
+  const existing = await prisma.appRelease.findUnique({ where: { version: version.trim() } });
+  if (existing) return res.status(409).json({ error: "A release with that version already exists." });
+
+  const release = await prisma.appRelease.create({
+    data: {
+      version: version.trim(),
+      changelog,
+      forceUpdateRequested: Boolean(forceUpdate),
+      minVersion: typeof minVersion === "string" && minVersion.trim() ? minVersion.trim() : "1.0.0",
+    },
+  });
+
+  await auditLog({
+    tool: "create_app_release",
+    tier: 2,
+    method: "POST",
+    path: "/app-releases",
+    args: { version, minVersion, forceUpdate, onBehalfOfEmail },
+    statusCode: 201,
+  });
+
+  return res.status(201).json({ release });
 });
 
 // ── Waitlist (tier 1: read) ────────────────────────────────
