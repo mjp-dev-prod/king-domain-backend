@@ -1,7 +1,9 @@
 const express = require("express");
 const multer = require("multer");
+const crypto = require("node:crypto");
 const { prisma } = require("../db");
 const { rateLimit } = require("../admin/rateLimit");
+const mailer = require("../admin/mailer");
 const { uploadProofFile, getProofFileSignedUrl } = require("../storage");
 const auth = require("./auth");
 const jwtUtil = require("./jwt");
@@ -15,6 +17,30 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 
 const MIN_PASSWORD_LENGTH = 8;
 const VALID_ROLES = ["talent", "client"];
+const VERIFICATION_CODE_TTL_MINUTES = 10;
+
+/** 6-digit numeric code — typed from an email, not a link, so keep it short. */
+function generateVerificationCode() {
+  return String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
+}
+
+function hashCode(code) {
+  return crypto.createHash("sha256").update(code).digest("hex");
+}
+
+/** Generates a fresh code, stores its hash, and sends it — shared by
+ * signup and the resend endpoint so the two can't drift apart. */
+async function issueVerificationCode(user) {
+  const code = generateVerificationCode();
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      verificationCodeHash: hashCode(code),
+      verificationCodeExpiresAt: new Date(Date.now() + VERIFICATION_CODE_TTL_MINUTES * 60 * 1000),
+    },
+  });
+  await mailer.sendVerificationCode({ to: user.email, code });
+}
 
 // ── Middleware ───────────────────────────────────────────
 
@@ -59,6 +85,7 @@ function publicUser(user) {
     email: user.email,
     role: user.role,
     fullName: user.fullName,
+    emailVerified: user.emailVerified,
     createdAt: user.createdAt,
   };
 }
@@ -134,8 +161,64 @@ router.post(
       await prisma.talentProfile.create({ data: { userId: user.id } });
     }
 
+    // Fire-and-forget, same as mailer's own fallback: if Brevo isn't
+    // configured the code is logged server-side instead of failing signup
+    // outright — signing up shouldn't hard-fail because email delivery isn't
+    // set up yet in a given environment.
+    issueVerificationCode(user).catch((err) =>
+      console.error("signup: failed to send verification code:", err),
+    );
+
     const tokens = await issueTokens(user.id, req.get("user-agent"));
     return res.status(201).json({ user: publicUser(user), ...tokens });
+  },
+);
+
+router.post(
+  "/verify-email",
+  requireUser,
+  rateLimit({ windowMs: 15 * 60 * 1000, max: 10, key: "user_verify_email" }),
+  async (req, res) => {
+    const { code } = req.body ?? {};
+    if (typeof code !== "string" || !code.trim()) {
+      return res.status(400).json({ error: "code is required." });
+    }
+
+    if (req.user.emailVerified) {
+      return res.json({ user: publicUser(req.user) });
+    }
+
+    if (
+      !req.user.verificationCodeHash ||
+      !req.user.verificationCodeExpiresAt ||
+      req.user.verificationCodeExpiresAt < new Date()
+    ) {
+      return res.status(400).json({ error: "Code expired. Request a new one." });
+    }
+
+    if (hashCode(code.trim()) !== req.user.verificationCodeHash) {
+      return res.status(400).json({ error: "Incorrect code." });
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: req.user.id },
+      data: { emailVerified: true, verificationCodeHash: null, verificationCodeExpiresAt: null },
+    });
+
+    return res.json({ user: publicUser(updated) });
+  },
+);
+
+router.post(
+  "/resend-code",
+  requireUser,
+  rateLimit({ windowMs: 15 * 60 * 1000, max: 5, key: "user_resend_code" }),
+  async (req, res) => {
+    if (req.user.emailVerified) {
+      return res.status(400).json({ error: "Email is already verified." });
+    }
+    await issueVerificationCode(req.user);
+    return res.json({ ok: true });
   },
 );
 

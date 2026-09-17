@@ -113,4 +113,24 @@ function sendCommentDigest({ to, decisionTitle, decisionId, commentCount }) {
   });
 }
 
-module.exports = { sendPasswordReset, sendInvite, sendNewDecisionNotice, sendCommentDigest };
+/** Sprint 4 (king-domain-mobile): the 6-digit code VerifyEmailScreen collects. */
+function sendVerificationCode({ to, code }) {
+  return send({
+    to,
+    subject: `${code} is your King Domain verification code`,
+    html: `
+      <p>Your verification code is:</p>
+      <p style="font-size:28px;font-weight:700;letter-spacing:4px;">${code}</p>
+      <p>This code expires in 10 minutes. If you didn't request this, you can ignore this email.</p>
+    `,
+    fallbackContext: `verification code for ${to}: ${code}`,
+  });
+}
+
+module.exports = {
+  sendPasswordReset,
+  sendInvite,
+  sendNewDecisionNotice,
+  sendCommentDigest,
+  sendVerificationCode,
+};

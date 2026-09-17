@@ -282,6 +282,16 @@ model User {
   passwordHash String
   role         WaitlistRole
   fullName     String
+  /// Sprint 4: signup creates the account immediately (unverified) so the
+  /// user is already logged in while they verify — matching
+  /// VerifyEmailScreen's real UX (enter the code, land straight in the
+  /// app), not "verify before you can even sign in."
+  emailVerified            Boolean   @default(false)
+  /// Only the SHA-256 hash is stored, same reasoning as AdminToken —
+  /// a database leak shouldn't yield a usable code. 6 digits, not a long
+  /// random token: this is read aloud/typed from an email, not a link.
+  verificationCodeHash     String?
+  verificationCodeExpiresAt DateTime?
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
