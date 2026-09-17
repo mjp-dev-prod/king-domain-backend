@@ -263,3 +263,173 @@ model AppRelease {
   @@index([status, isLatest])
   @@map("app_releases")
 }
+
+// ── Product domain: users, profiles, jobs, contracts ─────
+//
+// Sprint 1 of docs/research/BACKEND_SPRINT_PLAN.md. Mirrors the shapes
+// already designed and proven out in king-domain-mobile's Flutter models
+// (lib/data/models/talent_profile.dart, lib/data/models/job.dart) rather
+// than inventing a new schema from scratch. Reuses WaitlistRole's
+// talent/client vocabulary for User.role so the codebase has one naming
+// scheme for this distinction, not two.
+
+/// A student (talent) or a buyer (client). Auth follows the same
+/// access+refresh JWT pattern as AdminUser (see src/admin/jwt.js,
+/// src/user/jwt.js) rather than a new scheme — see UserSession below.
+model User {
+  id           String       @id @default(uuid())
+  email        String       @unique
+  passwordHash String
+  role         WaitlistRole
+  fullName     String
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  sessions       UserSession[]
+  talentProfile  TalentProfile?
+  jobsPosted     Job[]           @relation("JobsPostedByClient")
+  applications   Application[]
+
+  @@map("users")
+}
+
+/// Refresh-token store for User, structurally identical to AdminSession —
+/// see that model's schema comment for why a DB-backed refresh session
+/// exists alongside a stateless access token.
+model UserSession {
+  id         String    @id @default(uuid())
+  userId     String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  userAgent  String?
+  createdAt  DateTime  @default(now())
+  lastSeenAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("user_sessions")
+}
+
+/// Mirrors TalentProfile in talent_profile.dart field-for-field. One per
+/// talent User — a client User never has one.
+model TalentProfile {
+  id              String   @id @default(uuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  headline        String   @default("")
+  bio             String   @default("")
+  skillCategories String[] @default([])
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  proofItems ProofItem[]
+
+  @@map("talent_profiles")
+}
+
+enum ProofReviewStatus {
+  pending
+  verified
+}
+
+/// Mirrors ProofItem in talent_profile.dart. `isVerifiedIn(category)` in
+/// the Flutter model becomes: does this talent have a ProofItem in that
+/// category with status verified. Verification is per-category, not
+/// per-profile — see the Dart model's own comment on why (Milestone 03,
+/// the anti-spam gate).
+model ProofItem {
+  id              String            @id @default(uuid())
+  talentProfileId String
+  talentProfile   TalentProfile     @relation(fields: [talentProfileId], references: [id], onDelete: Cascade)
+  category        String
+  title           String
+  /// Supabase Storage URL — see src/storage.js's uploadApk for the pattern
+  /// this follows (Sprint 2 adds the proof-items bucket equivalent).
+  fileUrl         String?
+  status          ProofReviewStatus @default(pending)
+  /// Set by whichever admin/reviewer approves or rejects the item —
+  /// Sprint 2's human-review workflow. Null while pending.
+  reviewedById    String?
+  reviewedAt      DateTime?
+  createdAt       DateTime          @default(now())
+
+  @@index([talentProfileId, category])
+  @@map("proof_items")
+}
+
+/// Mirrors Job in job.dart. Posted by a client User.
+model Job {
+  id          String   @id @default(uuid())
+  clientId    String
+  client      User     @relation("JobsPostedByClient", fields: [clientId], references: [id])
+  title       String
+  category    String
+  description String
+  budget      Decimal  @db.Decimal(12, 2)
+  /// Set once a client selects one Application — see Application.status
+  /// and the correction doc this enforces (docs/core/
+  /// correction-talent-discovery-screen.md): selecting one applicant must
+  /// mark every other Application on this Job as not selected, not leave
+  /// them ambiguously pending.
+  awardedApplicationId String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  applications Application[]
+  contract     Contract?
+
+  @@index([category])
+  @@map("jobs")
+}
+
+enum ApplicationStatus {
+  pending
+  selected
+  /// Set on every other Application when the client awards the Job to one
+  /// of them — see Job.awardedApplicationId.
+  notSelected
+}
+
+/// Mirrors JobApplicationStatus in job.dart (notApplied/pending/accepted/
+/// rejected), but modelled as its own row rather than an enum on Job,
+/// since a Job now has many applicants (job.dart's mock only ever
+/// tracked one talent's status against one job).
+model Application {
+  id        String            @id @default(uuid())
+  jobId     String
+  job       Job               @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  talentId  String
+  talent    User              @relation(fields: [talentId], references: [id])
+  status    ApplicationStatus @default(pending)
+  createdAt DateTime          @default(now())
+
+  @@unique([jobId, talentId])
+  @@index([jobId, status])
+  @@map("applications")
+}
+
+enum ContractStatus {
+  funded
+  inProgress
+  submitted
+  approved
+}
+
+/// Mirrors ContractStatus in job.dart — funded/inProgress/submitted/
+/// approved. One per Job, created once a client awards it. "funded" here
+/// is a state transition, not a real payment yet — see Sprint 5 in
+/// docs/research/BACKEND_SPRINT_PLAN.md.
+model Contract {
+  id              String         @id @default(uuid())
+  jobId           String         @unique
+  job             Job            @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  status          ContractStatus @default(funded)
+  deliverableNote String?
+  deliverableUrl  String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@map("contracts")
+}

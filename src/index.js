@@ -3,6 +3,7 @@ require("dotenv/config");
 const Sentry = require("@sentry/node");
 const express = require("express");
 const waitlist = require("./waitlist");
+const user = require("./user/routes");
 const admin = require("./admin/routes");
 const adminWaitlist = require("./admin/waitlistRoutes");
 const adminDecisions = require("./admin/decisionRoutes");
@@ -54,6 +55,7 @@ app.get("/waitlist/count", async (req, res) => {
   res.json({ count: await waitlist.count() });
 });
 
+app.use("/users", user.router);
 app.use("/admin", admin.router);
 app.use("/admin/waitlist", adminWaitlist.router);
 app.use("/admin/decisions", adminDecisions.router);
