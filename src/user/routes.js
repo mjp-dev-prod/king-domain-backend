@@ -1,10 +1,17 @@
 const express = require("express");
+const multer = require("multer");
 const { prisma } = require("../db");
 const { rateLimit } = require("../admin/rateLimit");
+const { uploadProofFile, getProofFileSignedUrl } = require("../storage");
 const auth = require("./auth");
 const jwtUtil = require("./jwt");
 
 const router = express.Router();
+
+// Matches the proof-items Supabase Storage bucket's own limit — a work
+// sample is a screenshot/short file, not a video master, so this is
+// deliberately much tighter than the 50MB app-releases bucket.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 const MIN_PASSWORD_LENGTH = 8;
 const VALID_ROLES = ["talent", "client"];
@@ -54,6 +61,40 @@ function publicUser(user) {
     fullName: user.fullName,
     createdAt: user.createdAt,
   };
+}
+
+/** Resolves filePath to a short-lived signed URL — never returns the raw path. */
+async function serializeProofItem(item) {
+  return {
+    id: item.id,
+    category: item.category,
+    title: item.title,
+    fileUrl: item.filePath ? await getProofFileSignedUrl(item.filePath) : null,
+    status: item.status,
+    reviewedAt: item.reviewedAt,
+    createdAt: item.createdAt,
+  };
+}
+
+async function serializeTalentProfile(profile) {
+  return {
+    id: profile.id,
+    headline: profile.headline,
+    bio: profile.bio,
+    skillCategories: profile.skillCategories,
+    proofItems: await Promise.all(profile.proofItems.map(serializeProofItem)),
+  };
+}
+
+/** Only talent accounts have a TalentProfile — client accounts 404 here. */
+async function requireTalentProfile(req, res, next) {
+  if (req.user.role !== "talent") {
+    return res.status(403).json({ error: "Only talent accounts have a profile." });
+  }
+  const profile = await prisma.talentProfile.findUnique({ where: { userId: req.user.id } });
+  if (!profile) return res.status(404).json({ error: "Talent profile not found." });
+  req.talentProfile = profile;
+  next();
 }
 
 // ── Routes ───────────────────────────────────────────────
@@ -143,6 +184,99 @@ router.post("/auth/logout", async (req, res) => {
 
 router.get("/me", requireUser, async (req, res) => {
   return res.json({ user: publicUser(req.user) });
+});
+
+// ── Talent profile ───────────────────────────────────────
+
+router.get("/me/profile", requireUser, requireTalentProfile, async (req, res) => {
+  const profile = await prisma.talentProfile.findUnique({
+    where: { id: req.talentProfile.id },
+    include: { proofItems: { orderBy: { createdAt: "desc" } } },
+  });
+  return res.json({ profile: await serializeTalentProfile(profile) });
+});
+
+router.patch("/me/profile", requireUser, requireTalentProfile, async (req, res) => {
+  const { headline, bio, skillCategories } = req.body ?? {};
+
+  const data = {};
+  if (headline !== undefined) {
+    if (typeof headline !== "string") return res.status(400).json({ error: "headline must be a string." });
+    data.headline = headline;
+  }
+  if (bio !== undefined) {
+    if (typeof bio !== "string") return res.status(400).json({ error: "bio must be a string." });
+    data.bio = bio;
+  }
+  if (skillCategories !== undefined) {
+    if (!Array.isArray(skillCategories) || !skillCategories.every((c) => typeof c === "string")) {
+      return res.status(400).json({ error: "skillCategories must be an array of strings." });
+    }
+    data.skillCategories = skillCategories;
+  }
+
+  const updated = await prisma.talentProfile.update({
+    where: { id: req.talentProfile.id },
+    data,
+    include: { proofItems: { orderBy: { createdAt: "desc" } } },
+  });
+  return res.json({ profile: await serializeTalentProfile(updated) });
+});
+
+// ── Proof items — submission (review lives under /admin, see
+// admin/proofReviewRoutes.js: this is deliberately a one-way door, a
+// talent can submit and read their own items but never verify them) ──
+
+router.post(
+  "/me/proof-items",
+  requireUser,
+  requireTalentProfile,
+  upload.single("file"),
+  async (req, res) => {
+    const { category, title } = req.body ?? {};
+
+    if (typeof category !== "string" || !category.trim()) {
+      return res.status(400).json({ error: "category is required." });
+    }
+    if (typeof title !== "string" || !title.trim()) {
+      return res.status(400).json({ error: "title is required." });
+    }
+
+    let filePath = null;
+    if (req.file) {
+      filePath = await uploadProofFile({
+        talentProfileId: req.talentProfile.id,
+        buffer: req.file.buffer,
+        originalName: req.file.originalname,
+        contentType: req.file.mimetype,
+      });
+    }
+
+    const item = await prisma.proofItem.create({
+      data: {
+        talentProfileId: req.talentProfile.id,
+        category: category.trim(),
+        title: title.trim(),
+        filePath,
+      },
+    });
+
+    return res.status(201).json({ proofItem: await serializeProofItem(item) });
+  },
+);
+
+router.delete("/me/proof-items/:id", requireUser, requireTalentProfile, async (req, res) => {
+  const item = await prisma.proofItem.findUnique({ where: { id: req.params.id } });
+  if (!item || item.talentProfileId !== req.talentProfile.id) {
+    return res.status(404).json({ error: "Proof item not found." });
+  }
+  // Deliberately no delete once verified — that would let a talent erase a
+  // reviewer's decision. Removal is only for items still pending review.
+  if (item.status === "verified") {
+    return res.status(400).json({ error: "A verified proof item can't be removed." });
+  }
+  await prisma.proofItem.delete({ where: { id: item.id } });
+  return res.json({ ok: true });
 });
 
 module.exports = { router, requireUser };

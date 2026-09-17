@@ -345,9 +345,12 @@ model ProofItem {
   talentProfile   TalentProfile     @relation(fields: [talentProfileId], references: [id], onDelete: Cascade)
   category        String
   title           String
-  /// Supabase Storage URL — see src/storage.js's uploadApk for the pattern
-  /// this follows (Sprint 2 adds the proof-items bucket equivalent).
-  fileUrl         String?
+  /// Supabase Storage PATH, not a URL — the proof-items bucket is private
+  /// (personal work samples, not a public download like app-releases), so
+  /// this is only ever resolved to a real, time-limited link on read via
+  /// storage.js's getProofFileSignedUrl. Never expose this raw value to a
+  /// client; API responses always serialize it through that function.
+  filePath        String?
   status          ProofReviewStatus @default(pending)
   /// Set by whichever admin/reviewer approves or rejects the item —
   /// Sprint 2's human-review workflow. Null while pending.
