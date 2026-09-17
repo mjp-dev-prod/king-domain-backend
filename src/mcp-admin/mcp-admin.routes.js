@@ -1,6 +1,7 @@
 const express = require("express");
 const { prisma } = require("../db");
 const { requireMcpToken } = require("./mcp-admin.middleware");
+const mailer = require("../admin/mailer");
 
 const router = express.Router();
 router.use(requireMcpToken);
@@ -136,6 +137,21 @@ router.post("/decisions", async (req, res) => {
     },
     include: detailInclude,
   });
+
+  // Same notification the dashboard's POST /decisions sends (decisionRoutes.js)
+  // — this MCP route creates the identical record, so it must not silently
+  // skip notifying every other admin.
+  const recipients = await prisma.adminUser.findMany({
+    where: { status: "active", id: { not: actor.id } },
+    select: { email: true },
+  });
+  await Promise.all(
+    recipients.map((r) =>
+      mailer.sendNewDecisionNotice({ to: r.email, decision }).catch((err) => {
+        console.error("mcp-admin.routes: sendNewDecisionNotice failed:", err);
+      }),
+    ),
+  );
 
   await auditLog({
     tool: "create_decision",
