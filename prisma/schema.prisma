@@ -435,14 +435,20 @@ enum ContractStatus {
 /// is a state transition, not a real payment yet — see Sprint 5 in
 /// docs/research/BACKEND_SPRINT_PLAN.md.
 model Contract {
-  id              String         @id @default(uuid())
-  jobId           String         @unique
-  job             Job            @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  status          ContractStatus @default(funded)
-  deliverableNote String?
-  deliverableUrl  String?
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  id                  String         @id @default(uuid())
+  jobId               String         @unique
+  job                 Job            @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  status              ContractStatus @default(funded)
+  deliverableNote     String?
+  deliverableUrl      String?
+  // Supabase Storage PATH, not a URL — deliverables bucket is private, same
+  // pattern as ProofItem.filePath, resolved via getDeliverableFileSignedUrl
+  // on read. Separate from deliverableUrl, which stays free text for a
+  // talent who wants to paste an external link (e.g. a Drive/Figma link)
+  // instead of uploading a file.
+  deliverableFilePath String?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
 
   @@map("contracts")
 }

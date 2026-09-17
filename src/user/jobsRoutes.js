@@ -1,9 +1,15 @@
 const express = require("express");
+const multer = require("multer");
 const { prisma } = require("../db");
 const { requireUser, requireTalentProfile } = require("./routes");
+const { uploadDeliverableFile, getDeliverableFileSignedUrl } = require("../storage");
 
 const router = express.Router();
 router.use(requireUser);
+
+// Matches proof-items' own limit — a deliverable is the same kind of
+// personal work file (image/doc/video-thumbnail-sized), not bulk media.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 // Mirrors the state machine already built and proven in king-domain-mobile's
 // Flutter app (lib/presentation/providers/jobs_provider.dart): applyTo ->
@@ -11,7 +17,17 @@ router.use(requireUser);
 // same as JobsNotifier.simulateAcceptAndFund — there's no separate payment
 // step yet, see Sprint 5) -> startWork -> submitDeliverable -> approve.
 
-function serializeJob(job) {
+/**
+ * `myApplicationStatus` is the requesting talent's own status on this job
+ * ('pending' | 'selected' | 'notSelected' | null if never applied) —
+ * resolved from the `applications` relation loaded with a `where:
+ * {talentId: req.user.id}` filter in the routes below, so it only ever
+ * contains 0 or 1 rows: this talent's own application, if any. Lets the
+ * Flutter app disable "Apply" right after applying, not only once the job
+ * is awarded to someone — a job.dart-side gap this closes.
+ */
+async function serializeJob(job, viewerApplications) {
+  const mine = viewerApplications?.[0];
   return {
     id: job.id,
     title: job.title,
@@ -23,8 +39,9 @@ function serializeJob(job) {
       : undefined,
     awardedApplicationId: job.awardedApplicationId,
     applicationCount: job._count?.applications,
+    myApplicationStatus: mine?.status ?? null,
     createdAt: job.createdAt,
-    contract: job.contract ? serializeContract(job.contract) : null,
+    contract: job.contract ? await serializeContract(job.contract) : null,
   };
 }
 
@@ -40,13 +57,17 @@ function serializeApplication(app) {
   };
 }
 
-function serializeContract(contract) {
+/** Resolves deliverableFilePath to a short-lived signed URL — never returns the raw path. */
+async function serializeContract(contract) {
   return {
     id: contract.id,
     jobId: contract.jobId,
     status: contract.status,
     deliverableNote: contract.deliverableNote,
     deliverableUrl: contract.deliverableUrl,
+    deliverableFileUrl: contract.deliverableFilePath
+      ? await getDeliverableFileSignedUrl(contract.deliverableFilePath)
+      : null,
     createdAt: contract.createdAt,
     updatedAt: contract.updatedAt,
   };
@@ -68,18 +89,28 @@ router.get("/", async (req, res) => {
   const jobs = await prisma.job.findMany({
     where: category ? { category: String(category) } : undefined,
     orderBy: { createdAt: "desc" },
-    include: { client: true, contract: true, _count: { select: { applications: true } } },
+    include: {
+      client: true,
+      contract: true,
+      _count: { select: { applications: true } },
+      applications: { where: { talentId: req.user.id } },
+    },
   });
-  return res.json({ jobs: jobs.map(serializeJob) });
+  return res.json({ jobs: await Promise.all(jobs.map((job) => serializeJob(job, job.applications))) });
 });
 
 router.get("/:id", async (req, res) => {
   const job = await prisma.job.findUnique({
     where: { id: req.params.id },
-    include: { client: true, contract: true, _count: { select: { applications: true } } },
+    include: {
+      client: true,
+      contract: true,
+      _count: { select: { applications: true } },
+      applications: { where: { talentId: req.user.id } },
+    },
   });
   if (!job) return res.status(404).json({ error: "Job not found." });
-  return res.json({ job: serializeJob(job) });
+  return res.json({ job: await serializeJob(job, job.applications) });
 });
 
 router.post("/", requireClient, async (req, res) => {
@@ -110,7 +141,7 @@ router.post("/", requireClient, async (req, res) => {
     include: { client: true, contract: true, _count: { select: { applications: true } } },
   });
 
-  return res.status(201).json({ job: serializeJob(job) });
+  return res.status(201).json({ job: await serializeJob(job) });
 });
 
 // ── Applications ─────────────────────────────────────────
@@ -203,7 +234,7 @@ router.post("/:id/applications/:applicationId/award", requireClient, async (req,
     prisma.contract.create({ data: { jobId: job.id, status: "funded" } }),
   ]);
 
-  return res.status(201).json({ contract: serializeContract(contract) });
+  return res.status(201).json({ contract: await serializeContract(contract) });
 });
 
 // ── Contract lifecycle ───────────────────────────────────
@@ -249,7 +280,7 @@ router.post(
       where: { id: req.contract.id },
       data: { status: "inProgress" },
     });
-    return res.json({ contract: serializeContract(updated) });
+    return res.json({ contract: await serializeContract(updated) });
   },
 );
 
@@ -258,17 +289,30 @@ router.post(
   loadContractForJob,
   requireAwardedTalent,
   requireContractStatus("inProgress"),
+  upload.single("file"),
   async (req, res) => {
     const { deliverableNote, deliverableUrl } = req.body ?? {};
+
+    let deliverableFilePath = req.contract.deliverableFilePath;
+    if (req.file) {
+      deliverableFilePath = await uploadDeliverableFile({
+        contractId: req.contract.id,
+        buffer: req.file.buffer,
+        originalName: req.file.originalname,
+        contentType: req.file.mimetype,
+      });
+    }
+
     const updated = await prisma.contract.update({
       where: { id: req.contract.id },
       data: {
         status: "submitted",
         deliverableNote: typeof deliverableNote === "string" ? deliverableNote : req.contract.deliverableNote,
         deliverableUrl: typeof deliverableUrl === "string" ? deliverableUrl : req.contract.deliverableUrl,
+        deliverableFilePath,
       },
     });
-    return res.json({ contract: serializeContract(updated) });
+    return res.json({ contract: await serializeContract(updated) });
   },
 );
 
@@ -285,7 +329,7 @@ router.post(
       where: { id: req.contract.id },
       data: { status: "approved" },
     });
-    return res.json({ contract: serializeContract(updated) });
+    return res.json({ contract: await serializeContract(updated) });
   },
 );
 
