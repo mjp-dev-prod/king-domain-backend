@@ -327,6 +327,19 @@ function sendEscalationToAdmin({ to, jobTitle, contractId, reason, note }) {
   });
 }
 
+/** Stage 2 only records this; cancel-for-refund arrives with stage 3. */
+function sendDeliveryOverdueToClient({ to, jobTitle, deliverByAt }) {
+  return send({
+    to,
+    subject: `"${jobTitle}" is 3 days past its delivery date`,
+    html: `
+      <p>The delivery date for <strong>${escapeHtml(jobTitle)}</strong> was <strong>${formatWAT(deliverByAt)}</strong>. It has now passed by 3 days with nothing delivered and no extension agreed, and we've recorded this on the job.</p>
+      <p>The option to cancel for a refund of the job budget isn't available in the app yet.</p>
+    `,
+    fallbackContext: `delivery overdue (client) for ${to}: ${jobTitle}`,
+  });
+}
+
 /** App users (talent/client): the code ResetPasswordScreen collects. */
 function sendUserPasswordResetCode({ to, code, expiresInMinutes }) {
   return send({
@@ -374,4 +387,5 @@ module.exports = {
   sendChangesRequested,
   sendEscalated,
   sendEscalationToAdmin,
+  sendDeliveryOverdueToClient,
 };

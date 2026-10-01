@@ -308,6 +308,7 @@ async function autoReleaseOne(contractId, deps) {
 const STAGE2_SWEEPS = [
   ["extensions", (deps) => extensions.sweepExtensions(deps)],
   ["changes", (deps) => changes.sweepChanges(deps)],
+  ["overdue", (deps) => extensions.sweepOverdue(deps)],
 ];
 
 let ticking = false;

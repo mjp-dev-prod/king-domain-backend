@@ -173,4 +173,44 @@ async function sweepExtensions(deps) {
   return { autoGranted };
 }
 
-module.exports = { requestExtension, answerExtension, sweepExtensions };
+/**
+ * Tick: delivery date + 3 days, nothing delivered, no extension waiting for
+ * an answer -> flag once and tell the client. Stage 2 records the fact only;
+ * cancelling for a refund arrives with stage 3 (decision 2026-10-01).
+ */
+async function sweepOverdue(deps) {
+  const { prisma, mailer, now } = baseDeps(deps);
+  const at = now();
+  const cutoff = new Date(at.getTime() - RULES.overdueGraceMs);
+  const due = await prisma.contract.findMany({
+    where: {
+      status: { in: OPEN_STATUSES },
+      overdueFlaggedAt: null,
+      deliverByAt: { lte: cutoff },
+      extensions: { none: { status: "pending" } },
+    },
+    include: { job: true },
+  });
+  let flagged = 0;
+  for (const contract of due) {
+    const { count } = await prisma.contract.updateMany({
+      where: { id: contract.id, status: { in: OPEN_STATUSES }, overdueFlaggedAt: null, deliverByAt: { lte: cutoff } },
+      data: { overdueFlaggedAt: at },
+    });
+    console.log(
+      `overdue: contract=${contract.id} deliverByAt=${contract.deliverByAt.toISOString()} cutoff=${cutoff.toISOString()} flagged=${count === 1}`,
+    );
+    if (count === 0) continue;
+    flagged++;
+    await recordEvent(prisma, { jobId: contract.jobId, contractId: contract.id, type: "overdue", meta: { deliverByAt: contract.deliverByAt } });
+    const { client } = await parties(prisma, contract);
+    if (client) {
+      await mailer
+        .sendDeliveryOverdueToClient({ to: client.email, jobTitle: contract.job.title, deliverByAt: contract.deliverByAt })
+        .catch((err) => console.error("overdue: failed to email the client:", err));
+    }
+  }
+  return { flagged };
+}
+
+module.exports = { requestExtension, answerExtension, sweepExtensions, sweepOverdue };
