@@ -2,6 +2,7 @@ require("../instrument");
 require("dotenv/config");
 const Sentry = require("@sentry/node");
 const express = require("express");
+const { prisma } = require("./db");
 const waitlist = require("./waitlist");
 const user = require("./user/routes");
 const userJobs = require("./user/jobsRoutes");
@@ -49,6 +50,35 @@ app.use(express.json());
 
 app.get("/health", (req, res) => {
   res.json({ status: "ok" });
+});
+
+// Hit every 10 minutes by an external scheduler (cron-job.org): keeps
+// Render's free instance from spinning down (it sleeps after 15 idle
+// minutes) and touches the database so Supabase never sees a week of
+// inactivity and pauses the project. Kept separate from /health so a
+// database blip doesn't fail Render's own health check and restart the app.
+app.get("/health/db", async (req, res) => {
+  const started = Date.now();
+  let timer;
+  try {
+    await Promise.race([
+      prisma.$queryRaw`SELECT 1`,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("timed out after 5s")), 5000);
+      }),
+    ]);
+    res.json({ status: "ok", database: "ok", ms: Date.now() - started });
+  } catch (err) {
+    const cause = err.meta?.driverAdapterError?.cause;
+    console.error(
+      "health/db: database check failed:",
+      err.code ?? "",
+      cause ? JSON.stringify(cause) : String(err.message ?? err).replace(/\s+/g, " ").trim(),
+    );
+    res.status(503).json({ status: "degraded", database: "unreachable" });
+  } finally {
+    clearTimeout(timer);
+  }
 });
 
 app.post("/waitlist", waitlist.join);
