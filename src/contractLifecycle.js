@@ -12,12 +12,12 @@ const realPrisma = require("./db").prisma;
 const realPaystack = require("./paystack");
 const realMailer = require("./admin/mailer");
 const { confirmFunding } = require("./contractFunding");
+const { HOUR, RULES, autoReleaseEnabled, recordEvent } = require("./contractCore");
 
-const HOUR = 60 * 60 * 1000;
 const IN_FLIGHT_TRANSACTION_STATUSES = new Set(["ongoing", "pending", "processing", "queued"]);
 const WINDOWS = {
   paymentMs: 24 * HOUR,
-  reviewMs: 3 * 24 * HOUR,
+  reviewMs: RULES.reviewMs,
   // A bank transfer can still be settling after the client leaves checkout,
   // so cancellation waits this long after the latest checkout was opened.
   checkoutGraceMs: 30 * 60 * 1000,
@@ -31,16 +31,6 @@ const WINDOWS = {
   autoReleaseMaxAttempts: 24,
 };
 
-/**
- * Auto-release pays the talent when the client says nothing. That is only
- * fair once the client has a way to object (change requests and disputes —
- * later stages of the same decision), so it stays off until the setting is
- * switched on deliberately.
- */
-function autoReleaseEnabled() {
-  return process.env.AUTO_RELEASE_ENABLED === "true";
-}
-
 function defaults(deps = {}) {
   return {
     prisma: deps.prisma ?? realPrisma,
@@ -49,10 +39,6 @@ function defaults(deps = {}) {
     now: deps.now ?? (() => new Date()),
     autoRelease: deps.autoRelease ?? autoReleaseEnabled(),
   };
-}
-
-function recordEvent(db, { jobId, contractId, type, meta }) {
-  return db.contractEvent.create({ data: { jobId, contractId, type, meta: meta ?? undefined } });
 }
 
 // ── Money out (shared by the client's Approve and the auto-release) ──────

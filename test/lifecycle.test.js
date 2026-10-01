@@ -257,7 +257,7 @@ describe("HTTP routes (real server, real paystack.js client, fake Paystack over 
   it("K. award sets payByAt = now + 24h; opening a NEW checkout after it is refused", async () => {
     const ct = await h.tokenFor(ctx.client);
     const tt = await h.tokenFor(ctx.talentA);
-    const job = (await h.call(server.base, ct, "POST", "/jobs", { title: `${h.TITLE_PREFIX}http`, category: h.CATEGORY, description: "suite", budget: 2000 })).json.job;
+    const job = (await h.call(server.base, ct, "POST", "/jobs", { title: `${h.TITLE_PREFIX}http`, category: h.CATEGORY, description: "suite", budget: 2000, deliveryDays: 7 })).json.job;
     const talentProfile = await prisma.talentProfile.findUnique({ where: { userId: ctx.talentA.id } });
     await prisma.proofItem.upsert({
       where: { id: "00000000-0000-4000-8000-000000000001" },
@@ -302,6 +302,8 @@ describe("HTTP routes (real server, real paystack.js client, fake Paystack over 
       await new Promise((r) => setTimeout(r, 200));
     }
     assert.equal((await prisma.contract.findUnique({ where: { id: contractId } })).status, "funded", server.logs().slice(-600));
+    const funded = await prisma.contract.findUnique({ where: { id: contractId } });
+    assert.equal(funded.deliverByAt.getTime() - funded.fundedAt.getTime(), 7 * h.DAY_MS, "delivery date fixed at funding");
 
     await h.call(server.base, tt, "POST", `/jobs/${job.id}/contract/start`);
     const t1 = Date.now();

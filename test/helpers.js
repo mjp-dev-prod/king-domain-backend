@@ -104,22 +104,22 @@ function scopedPrisma() {
   return new Proxy(prisma, { get: (target, key) => (key === "contract" ? contract : typeof target[key] === "function" ? target[key].bind(target) : target[key]) });
 }
 
+/** Records every email the code tries to send, whatever the template. */
 function spyMailer() {
   const sent = [];
-  const m = { sent };
-  for (const k of [
-    "sendAwardCancelledToClient",
-    "sendAwardCancelledToTalent",
-    "sendPaymentAutoReleasedToTalent",
-    "sendPaymentAutoReleasedToClient",
-    "sendDeliveryAwaitingReview",
-  ]) {
-    m[k] = async (args) => {
-      sent.push({ k, to: args.to });
-      return { sent: true };
-    };
-  }
-  return m;
+  return new Proxy(
+    {},
+    {
+      get(_, key) {
+        if (key === "sent") return sent;
+        if (key === "then") return undefined; // not a promise
+        return async (args = {}) => {
+          sent.push({ k: key, to: args.to, args });
+          return { sent: true };
+        };
+      },
+    },
+  );
 }
 
 async function ensureUser(email, role, fullName) {
@@ -151,9 +151,9 @@ async function fixtures() {
 }
 
 /** A job awarded to talentA with talentB also having applied, written straight to the database. */
-async function seedAward({ client, talentA, talentB }, { budget = 1000, contract = {} } = {}) {
+async function seedAward({ client, talentA, talentB }, { budget = 1000, contract = {}, job: jobData = {} } = {}) {
   const job = await prisma.job.create({
-    data: { clientId: client.id, title: `${TITLE_PREFIX}${crypto.randomBytes(3).toString("hex")}`, category: CATEGORY, description: "suite", budget },
+    data: { clientId: client.id, title: `${TITLE_PREFIX}${crypto.randomBytes(3).toString("hex")}`, category: CATEGORY, description: "suite", budget, ...jobData },
   });
   const a = await prisma.application.create({ data: { jobId: job.id, talentId: talentA.id, status: "selected" } });
   const b = await prisma.application.create({ data: { jobId: job.id, talentId: talentB.id, status: "notSelected" } });
@@ -162,6 +162,32 @@ async function seedAward({ client, talentA, talentB }, { budget = 1000, contract
     data: { jobId: job.id, status: "awaitingPayment", platformFeeAmount: budget * 0.1, payByAt: past(), ...contract },
   });
   return { job, a, b, c };
+}
+
+const DAY_MS = 24 * 3_600_000;
+
+/** Funded and being worked on, with a delivery date. */
+function seedWorking(ctx, { deliveryDays = 5, status = "inProgress", deliverByAt, contract = {} } = {}) {
+  return seedAward(ctx, {
+    job: { deliveryDays },
+    contract: {
+      status,
+      payByAt: null,
+      fundedAt: new Date(),
+      deliverByAt: deliverByAt ?? new Date(Date.now() + deliveryDays * DAY_MS),
+      ...contract,
+    },
+  });
+}
+
+/** Delivered (version 1 exists) and awaiting review. */
+async function seedSubmitted(ctx, { changeRounds = 0, contract = {} } = {}) {
+  const s = await seedWorking(ctx, {
+    status: "submitted",
+    contract: { submittedAt: new Date(), reviewDueAt: new Date(Date.now() + 3 * DAY_MS), deliverableNote: "v1", changeRounds, ...contract },
+  });
+  await prisma.contractDelivery.create({ data: { contractId: s.c.id, version: 1, note: "v1" } });
+  return s;
 }
 
 /** Starts the real server against the test database, scheduler off, Paystack pointed at `paystackUrl`. */
@@ -205,4 +231,4 @@ const call = async (base, tok, method, p, body) => {
   return { status: r.status, json: await r.json().catch(() => null) };
 };
 
-module.exports = { prisma, CATEGORY, TITLE_PREFIX, past, future, fakeProvider, serveFakeProvider, scopedPrisma, spyMailer, fixtures, seedAward, tokenFor, startServer, call };
+module.exports = { prisma, CATEGORY, TITLE_PREFIX, past, future, fakeProvider, serveFakeProvider, scopedPrisma, spyMailer, fixtures, seedAward, seedWorking, seedSubmitted, DAY_MS, tokenFor, startServer, call };

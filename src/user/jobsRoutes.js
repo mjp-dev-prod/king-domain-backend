@@ -8,6 +8,7 @@ const paystack = require("../paystack");
 const { confirmFunding } = require("../contractFunding");
 const lifecycle = require("../contractLifecycle");
 const mailer = require("../admin/mailer");
+const { RULES } = require("../contractCore");
 
 const router = express.Router();
 router.use(requireUser);
@@ -37,6 +38,7 @@ async function serializeJob(job, viewerApplications) {
     category: job.category,
     description: job.description,
     budget: job.budget.toString(),
+    deliveryDays: job.deliveryDays ?? null,
     client: job.client
       ? { id: job.client.id, fullName: job.client.fullName, email: job.client.email }
       : undefined,
@@ -76,6 +78,11 @@ async function serializeContract(contract) {
     payByAt: contract.payByAt,
     submittedAt: contract.submittedAt,
     reviewDueAt: lifecycle.autoReleaseEnabled() ? contract.reviewDueAt : null,
+    deliverByAt: contract.deliverByAt ?? null,
+    extensionsUsed: contract.extensionsUsed ?? 0,
+    changeRounds: contract.changeRounds ?? 0,
+    changeDueAt: contract.changeDueAt ?? null,
+    overdue: Boolean(contract.overdueFlaggedAt),
     deliverableNote: contract.deliverableNote,
     deliverableUrl: contract.deliverableUrl,
     deliverableFileUrl: contract.deliverableFilePath
@@ -127,7 +134,7 @@ router.get("/:id", async (req, res) => {
 });
 
 router.post("/", requireClient, async (req, res) => {
-  const { title, category, description, budget } = req.body ?? {};
+  const { title, category, description, budget, deliveryDays } = req.body ?? {};
 
   if (typeof title !== "string" || !title.trim()) {
     return res.status(400).json({ error: "title is required." });
@@ -142,6 +149,12 @@ router.post("/", requireClient, async (req, res) => {
   if (!Number.isFinite(budgetNum) || budgetNum <= 0) {
     return res.status(400).json({ error: "budget must be a positive number." });
   }
+  const days = Number(deliveryDays);
+  if (!Number.isInteger(days) || days < RULES.deliveryDays.min || days > RULES.deliveryDays.max) {
+    return res.status(400).json({
+      error: `deliveryDays must be a whole number of days from ${RULES.deliveryDays.min} to ${RULES.deliveryDays.max}.`,
+    });
+  }
 
   const job = await prisma.job.create({
     data: {
@@ -150,6 +163,7 @@ router.post("/", requireClient, async (req, res) => {
       category: category.trim(),
       description: description.trim(),
       budget: budgetNum,
+      deliveryDays: days,
     },
     include: { client: true, contract: true, _count: { select: { applications: true } } },
   });
@@ -412,10 +426,13 @@ async function requireAwardedTalent(req, res, next) {
   next();
 }
 
-function requireContractStatus(status) {
+function requireContractStatus(statuses) {
+  const allowed = Array.isArray(statuses) ? statuses : [statuses];
   return (req, res, next) => {
-    if (req.contract.status !== status) {
-      return res.status(400).json({ error: `Contract must be '${status}' for this action (currently '${req.contract.status}').` });
+    if (!allowed.includes(req.contract.status)) {
+      return res.status(400).json({
+        error: `Contract must be '${allowed.join("' or '")}' for this action (currently '${req.contract.status}').`,
+      });
     }
     next();
   };

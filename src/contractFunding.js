@@ -3,6 +3,7 @@
 // idempotency and amount checks can't drift apart between the two paths.
 const { prisma } = require("./db");
 const { fromKobo } = require("./paystack");
+const { DAY } = require("./contractCore");
 
 // References are minted as kd_<contractId>_<8 hex> in jobsRoutes.js's
 // /contract/fund. Each retry of "Pay" mints a new reference and overwrites
@@ -76,12 +77,16 @@ async function confirmFunding({ reference, amountKobo, source }) {
     return { outcome: "amountMismatch", contract };
   }
 
+  const fundedAt = new Date();
+  // The delivery clock starts at funding, not at posting: a date chosen when
+  // the job was posted could run out before anyone was committed to it.
+  const deliverByAt = contract.job.deliveryDays ? new Date(fundedAt.getTime() + contract.job.deliveryDays * DAY) : null;
   const { count } = await prisma.contract.updateMany({
     where: { id: contract.id, status: "awaitingPayment" },
-    data: { status: "funded", fundedAt: new Date(), paystackReference: reference, paymentFailed: false },
+    data: { status: "funded", fundedAt, deliverByAt, paystackReference: reference, paymentFailed: false },
   });
   const readBack = await prisma.contract.findUnique({ where: { id: contract.id } });
-  console.log(`contractFunding[${source}]: updated=${count} readBackStatus=${readBack.status} contract=${contract.id}`);
+  console.log(`contractFunding[${source}]: updated=${count} readBackStatus=${readBack.status} contract=${contract.id} deliverByAt=${readBack.deliverByAt?.toISOString() ?? "none"}`);
 
   return { outcome: count === 1 ? "funded" : "alreadyFunded", contract: readBack };
 }

@@ -400,6 +400,10 @@ model Job {
   category    String
   description String
   budget      Decimal  @db.Decimal(12, 2)
+  /// Days the talent has to deliver, counted from funding (1–60). The
+  /// contract's deliverByAt is fixed from this when it is funded. Null on
+  /// jobs posted before delivery dates existed: no deadline features.
+  deliveryDays Int?
   /// Set once a client selects one Application — see Application.status
   /// and the correction doc this enforces (docs/core/
   /// correction-talent-discovery-screen.md): selecting one applicant must
@@ -451,6 +455,12 @@ enum ContractStatus {
   funded
   inProgress
   submitted
+  /// The client asked for changes; the talent owes a resubmit by changeDueAt.
+  changesRequested
+  /// Parked for an admin: round 2 still rejected, or the talent missed the
+  /// resubmit clock. Stage 2 only enters it; stage 3 builds the screen that
+  /// resolves it.
+  disputed
   approved
 }
 
@@ -506,6 +516,23 @@ model Contract {
   /// then left for an admin.
   autoReleaseAttempts      Int       @default(0)
   lastAutoReleaseAttemptAt DateTime?
+  /// fundedAt + Job.deliveryDays; granted extensions add their days.
+  deliverByAt         DateTime?
+  /// Extension REQUESTS made (a declined one counts). Max 2.
+  extensionsUsed      Int       @default(0)
+  /// Change rounds the client has opened. Max 2; after that, escalation.
+  changeRounds        Int       @default(0)
+  /// While changesRequested: the talent must resubmit by this or it goes to an admin.
+  changeDueAt         DateTime?
+  /// Set once by the tick when deliverByAt + 3 days passes with nothing delivered.
+  overdueFlaggedAt    DateTime?
+  /// Set while a payout is in flight (releasePayment), so a change request
+  /// can't slip in between the transfer and the status update.
+  releaseClaimedAt    DateTime?
+  extensions          ContractExtension[]
+  changeRequests      ChangeRequest[]
+  deliveries          ContractDelivery[]
+  reminders           ContractReminder[]
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
 
@@ -528,4 +555,76 @@ model ContractEvent {
   @@index([jobId, createdAt])
   @@index([contractId])
   @@map("contract_events")
+}
+
+enum ExtensionStatus {
+  pending
+  granted
+  declined
+  autoGranted
+  /// The talent delivered while the request was still open.
+  withdrawn
+}
+
+/// One extension request. Stage 2 of "How a job gets paid".
+model ContractExtension {
+  id            String          @id @default(uuid())
+  contractId    String
+  contract      Contract        @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  requestedDays Int
+  reason        String
+  status        ExtensionStatus @default(pending)
+  requestedAt   DateTime        @default(now())
+  answerDueAt   DateTime
+  resolvedAt    DateTime?
+  /// The client's user id; null when auto-granted or withdrawn.
+  resolvedById  String?
+
+  @@index([contractId, status])
+  @@index([status, answerDueAt])
+  @@map("contract_extensions")
+}
+
+/// One change round opened by the client.
+model ChangeRequest {
+  id            String    @id @default(uuid())
+  contractId    String
+  contract      Contract  @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  round         Int
+  reason        String
+  requestedAt   DateTime  @default(now())
+  resubmitDueAt DateTime
+  resubmittedAt DateTime?
+
+  @@unique([contractId, round])
+  @@map("change_requests")
+}
+
+/// Every delivery, immutable. Contract.deliverable* mirror the latest one.
+model ContractDelivery {
+  id          String   @id @default(uuid())
+  contractId  String
+  contract    Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  version     Int
+  note        String?
+  url         String?
+  /// Supabase Storage path (private bucket), never a URL.
+  filePath    String?
+  submittedAt DateTime @default(now())
+
+  @@unique([contractId, version])
+  @@map("contract_deliveries")
+}
+
+/// A reminder that was sent. Inserted BEFORE the email so a restart or two
+/// overlapping ticks can never send the same one twice.
+model ContractReminder {
+  id         String   @id @default(uuid())
+  contractId String
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  key        String
+  sentAt     DateTime @default(now())
+
+  @@unique([contractId, key])
+  @@map("contract_reminders")
 }
