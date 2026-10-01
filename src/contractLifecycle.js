@@ -14,6 +14,7 @@ const realMailer = require("./admin/mailer");
 const { confirmFunding } = require("./contractFunding");
 const { HOUR, RULES, autoReleaseEnabled, recordEvent } = require("./contractCore");
 const extensions = require("./contractExtensions");
+const changes = require("./contractChanges");
 
 const IN_FLIGHT_TRANSACTION_STATUSES = new Set(["ongoing", "pending", "processing", "queued"]);
 const WINDOWS = {
@@ -70,7 +71,7 @@ async function findPayoutAttempt(paystack, contractId) {
  * Returns { ok: true, contract } or { ok: false, status, code, error }.
  */
 async function releasePayment({ contractId, trigger }, deps) {
-  const { prisma, paystack } = defaults(deps);
+  const { prisma, paystack, now } = defaults(deps);
 
   const contract = await prisma.contract.findUnique({ where: { id: contractId }, include: { job: true } });
   if (!contract) return { ok: false, status: 404, code: "not_found", error: "Contract not found." };
@@ -86,6 +87,29 @@ async function releasePayment({ contractId, trigger }, deps) {
     return { ok: false, status: 400, code: "no_payout_account", error: "The talent hasn't set up a payout bank account yet." };
   }
 
+  // Claim the release before any money moves, so a change request (or a
+  // second release) can't slip in between the transfer and the status
+  // update. A claim older than RULES.releaseClaimStaleMs belongs to a release
+  // that crashed mid-way and may be taken over: findPayoutAttempt still
+  // reuses any transfer that crash left live.
+  const claimedAt = now();
+  const claim = await prisma.contract.updateMany({
+    where: {
+      id: contract.id,
+      status: "submitted",
+      OR: [{ releaseClaimedAt: null }, { releaseClaimedAt: { lte: new Date(claimedAt.getTime() - RULES.releaseClaimStaleMs) } }],
+    },
+    data: { releaseClaimedAt: claimedAt },
+  });
+  console.log(
+    `release: claim contract=${contract.id} trigger=${trigger} claimed=${claim.count === 1} previousClaim=${contract.releaseClaimedAt?.toISOString() ?? "none"}`,
+  );
+  if (claim.count === 0) {
+    return { ok: false, status: 409, code: "release_in_progress", error: "Payment is already being released. Refresh in a moment." };
+  }
+  const unclaim = () =>
+    prisma.contract.updateMany({ where: { id: contract.id, releaseClaimedAt: claimedAt }, data: { releaseClaimedAt: null } });
+
   let attempt;
   let transfer;
   try {
@@ -99,6 +123,7 @@ async function releasePayment({ contractId, trigger }, deps) {
         reason: `Payment for "${contract.job.title}"`,
       }));
   } catch (err) {
+    await unclaim();
     return { ok: false, status: 502, code: "transfer_error", error: err.message || "Could not release payment right now." };
   }
 
@@ -112,10 +137,12 @@ async function releasePayment({ contractId, trigger }, deps) {
       `release: PAYOUT NOT SENT — ${attempt.reference} is waiting on transfer approval (status=${transfer.status}). ` +
         `Turn off "Confirm transfers before sending" in Paystack Preferences. contract=${contract.id}`,
     );
+    await unclaim();
     return { ok: false, status: 502, code: "transfer_waiting", error: "Payment couldn't be released yet. Please try again later." };
   }
   if (transfer.status !== "success" && transfer.status !== "pending") {
     console.error(`release: PAYOUT NOT SENT — ${attempt.reference} status=${transfer.status} contract=${contract.id}`);
+    await unclaim();
     return { ok: false, status: 502, code: "transfer_failed", error: "Payment couldn't be released right now. Please try again shortly." };
   }
 
@@ -242,6 +269,10 @@ async function autoReleaseOne(contractId, deps) {
   if (claimed.count === 0) return { outcome: "not_claimed" };
 
   const result = await releasePayment({ contractId, trigger: "auto_release" }, deps);
+  // Lost a race with the client's own Approve (or a change request): not a failure.
+  if (!result.ok && (result.code === "release_in_progress" || result.code === "not_submitted")) {
+    return { outcome: "superseded" };
+  }
   const contract = await prisma.contract.findUnique({
     where: { id: contractId },
     include: { job: { include: { client: true } } },
@@ -274,7 +305,10 @@ async function autoReleaseOne(contractId, deps) {
 
 // Stage 2 sweeps, run after the stage 1 work on every tick. Each starts from
 // prisma.contract.findMany, so a test can scope a whole tick to its own rows.
-const STAGE2_SWEEPS = [["extensions", (deps) => extensions.sweepExtensions(deps)]];
+const STAGE2_SWEEPS = [
+  ["extensions", (deps) => extensions.sweepExtensions(deps)],
+  ["changes", (deps) => changes.sweepChanges(deps)],
+];
 
 let ticking = false;
 

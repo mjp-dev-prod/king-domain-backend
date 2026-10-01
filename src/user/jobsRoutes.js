@@ -563,6 +563,24 @@ router.post("/:id/contract/extension/:extensionId/answer", loadContractForJob, r
   return res.json({ contract: await serializeContract(result.contract) });
 });
 
+/**
+ * The client sends delivered work back with a reason. After the second
+ * round the same action escalates the job to an admin instead
+ * (`escalated: true` in the response).
+ */
+router.post(
+  "/:id/contract/request-changes",
+  loadContractForJob,
+  requireClient,
+  requireContractStatus("submitted"),
+  async (req, res) => {
+    if (req.job.clientId !== req.user.id) return res.status(403).json({ error: "Not your job." });
+    const result = await changes.requestChanges({ contractId: req.contract.id, clientId: req.user.id, reason: req.body?.reason });
+    if (!result.ok) return res.status(result.status).json({ error: result.error });
+    return res.json({ escalated: result.escalated, contract: await serializeContract(result.contract) });
+  },
+);
+
 /** Every delivery version, extension request and change round, oldest first. */
 router.get("/:id/contract/history", loadContractForJob, requireParty, async (req, res) => {
   const contractId = req.contract.id;

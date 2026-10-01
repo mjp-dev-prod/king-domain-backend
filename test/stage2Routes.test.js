@@ -68,3 +68,15 @@ describe("extension routes", () => {
     assert.ok(granted.json.contract.deliverByAt);
   });
 });
+
+describe("request-changes route", () => {
+  it("only the job's client; talent 403", async () => {
+    const s = await h.seedSubmitted(ctx);
+    const path = `/jobs/${s.job.id}/contract/request-changes`;
+    assert.equal((await post(tt, path, { reason: "Please change the font." })).status, 403);
+    const r = await post(ct, path, { reason: "Please change the font." });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(r.json.contract.status, "changesRequested");
+    assert.equal(r.json.escalated, false);
+  });
+});

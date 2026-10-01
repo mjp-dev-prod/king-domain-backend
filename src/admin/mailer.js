@@ -283,6 +283,50 @@ function sendExtensionAutoGrantedToClient({ to, jobTitle, deliverByAt }) {
   });
 }
 
+function sendChangesRequested({ to, jobTitle, round, maxRounds, reason, resubmitDueAt }) {
+  return send({
+    to,
+    subject: `Changes requested on "${jobTitle}" (round ${round} of ${maxRounds})`,
+    html: `
+      <p>The client asked for changes to <strong>${escapeHtml(jobTitle)}</strong>.</p>
+      <p>What they asked for: "${escapeHtml(reason)}"</p>
+      <p>Please resubmit in the app by <strong>${formatWAT(resubmitDueAt)}</strong>. If you don't resubmit by then, the job goes to a King Domain admin.</p>
+      ${round === maxRounds ? "<p>This is the last round: if the client is still not satisfied after it, an admin will decide.</p>" : ""}
+    `,
+    fallbackContext: `changes requested (round ${round}) for ${to}: ${jobTitle}`,
+  });
+}
+
+const ESCALATION_REASONS = {
+  client_rejected_after_final_round: "The client was still not satisfied after the last round of changes",
+  talent_missed_change_deadline: "The requested changes weren't resubmitted in time",
+};
+
+function sendEscalated({ to, jobTitle, reason }) {
+  return send({
+    to,
+    subject: `"${jobTitle}" has gone to a King Domain admin`,
+    html: `
+      <p>${ESCALATION_REASONS[reason]} on <strong>${escapeHtml(jobTitle)}</strong>, so the job has gone to a King Domain admin.</p>
+      <p>The admin will look at every version of the work and the change requests, and decide. Nothing is paid out or refunded until then.</p>
+    `,
+    fallbackContext: `escalated (${reason}) for ${to}: ${jobTitle}`,
+  });
+}
+
+function sendEscalationToAdmin({ to, jobTitle, contractId, reason, note }) {
+  return send({
+    to,
+    subject: `Dispute needs an admin: "${jobTitle}"`,
+    html: `
+      <p><strong>${escapeHtml(jobTitle)}</strong> (contract ${escapeHtml(contractId)}) was escalated: ${ESCALATION_REASONS[reason]}.</p>
+      ${note ? `<p>The client wrote: "${escapeHtml(note)}"</p>` : ""}
+      <p>There is no dispute screen yet (stage 3). The contract is parked as <code>disputed</code>; nothing moves until it is resolved.</p>
+    `,
+    fallbackContext: `escalation (${reason}) to admin ${to}: ${contractId}`,
+  });
+}
+
 /** App users (talent/client): the code ResetPasswordScreen collects. */
 function sendUserPasswordResetCode({ to, code, expiresInMinutes }) {
   return send({
@@ -327,4 +371,7 @@ module.exports = {
   sendExtensionRequested,
   sendExtensionAnswered,
   sendExtensionAutoGrantedToClient,
+  sendChangesRequested,
+  sendEscalated,
+  sendEscalationToAdmin,
 };
