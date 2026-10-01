@@ -15,6 +15,7 @@ const { confirmFunding } = require("./contractFunding");
 const { HOUR, RULES, autoReleaseEnabled, recordEvent } = require("./contractCore");
 const extensions = require("./contractExtensions");
 const changes = require("./contractChanges");
+const reminders = require("./contractReminders");
 
 const IN_FLIGHT_TRANSACTION_STATUSES = new Set(["ongoing", "pending", "processing", "queued"]);
 const WINDOWS = {
@@ -309,6 +310,7 @@ const STAGE2_SWEEPS = [
   ["extensions", (deps) => extensions.sweepExtensions(deps)],
   ["changes", (deps) => changes.sweepChanges(deps)],
   ["overdue", (deps) => extensions.sweepOverdue(deps)],
+  ["reminders", (deps) => reminders.sweepReminders(deps)],
 ];
 
 let ticking = false;

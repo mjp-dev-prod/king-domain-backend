@@ -340,6 +340,41 @@ function sendDeliveryOverdueToClient({ to, jobTitle, deliverByAt }) {
   });
 }
 
+const CLOCK_REMINDERS = {
+  extension: (t, d) => [
+    `Answer the extension request on "${t}"`,
+    `Please grant or decline the talent's extension request on <strong>${escapeHtml(t)}</strong> by <strong>${formatWAT(d)}</strong>. If you don't answer by then, it is granted automatically.`,
+  ],
+  review: (t, d) => [
+    `Review the delivery on "${t}"`,
+    `Please review the delivery of <strong>${escapeHtml(t)}</strong> by <strong>${formatWAT(d)}</strong>. If you don't, payment is released to the talent automatically.`,
+  ],
+  change: (t, d) => [
+    `Resubmit "${t}"`,
+    `Please resubmit <strong>${escapeHtml(t)}</strong> with the requested changes by <strong>${formatWAT(d)}</strong>. If you don't, the job goes to a King Domain admin.`,
+  ],
+  delivery: (t, d) => [
+    `"${t}" is due ${formatWAT(d)}`,
+    `<strong>${escapeHtml(t)}</strong> is due <strong>${formatWAT(d)}</strong>. If you need more time, ask for an extension in the app before then.`,
+  ],
+  deliveryPassed: (t, d) => [
+    `"${t}" is past its delivery date`,
+    `The delivery date for <strong>${escapeHtml(t)}</strong> (<strong>${formatWAT(d)}</strong>) has passed. Deliver now, or ask for an extension in the app within 3 days of that date.`,
+  ],
+  deliveryMissedPassed: (t, d) => [
+    `"${t}" passed its delivery date`,
+    `The delivery date for <strong>${escapeHtml(t)}</strong> (<strong>${formatWAT(d)}</strong>) has passed and nothing has been delivered yet. The talent has been reminded and can still deliver or ask you for an extension within 3 days.`,
+  ],
+};
+
+/** One template for every clock reminder (contractReminders.js). */
+async function sendClockReminder({ to, kind, jobTitle, dueAt }) {
+  const build = CLOCK_REMINDERS[kind];
+  if (!build) throw new Error(`Unknown reminder kind: ${kind}`);
+  const [subject, body] = build(jobTitle, dueAt);
+  return send({ to, subject, html: `<p>${body}</p>`, fallbackContext: `reminder ${kind} for ${to}: ${jobTitle}` });
+}
+
 /** App users (talent/client): the code ResetPasswordScreen collects. */
 function sendUserPasswordResetCode({ to, code, expiresInMinutes }) {
   return send({
@@ -388,4 +423,5 @@ module.exports = {
   sendEscalated,
   sendEscalationToAdmin,
   sendDeliveryOverdueToClient,
+  sendClockReminder,
 };
