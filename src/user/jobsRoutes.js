@@ -9,6 +9,7 @@ const { confirmFunding } = require("../contractFunding");
 const lifecycle = require("../contractLifecycle");
 const mailer = require("../admin/mailer");
 const { RULES } = require("../contractCore");
+const changes = require("../contractChanges");
 
 const router = express.Router();
 router.use(requireUser);
@@ -59,6 +60,18 @@ function serializeApplication(app) {
     talent: app.talent
       ? { id: app.talent.id, fullName: app.talent.fullName, email: app.talent.email }
       : undefined,
+  };
+}
+
+function serializeExtension(e) {
+  return {
+    id: e.id,
+    requestedDays: e.requestedDays,
+    reason: e.reason,
+    status: e.status,
+    requestedAt: e.requestedAt,
+    answerDueAt: e.answerDueAt,
+    resolvedAt: e.resolvedAt,
   };
 }
 
@@ -426,6 +439,16 @@ async function requireAwardedTalent(req, res, next) {
   next();
 }
 
+/** The job's client or its awarded talent — nobody else sees a contract's history. */
+async function requireParty(req, res, next) {
+  if (req.job.clientId === req.user.id) return next();
+  const application = req.job.awardedApplicationId
+    ? await prisma.application.findUnique({ where: { id: req.job.awardedApplicationId } })
+    : null;
+  if (application?.talentId === req.user.id) return next();
+  return res.status(403).json({ error: "Only the client and the awarded talent can see this contract's history." });
+}
+
 function requireContractStatus(statuses) {
   const allowed = Array.isArray(statuses) ? statuses : [statuses];
   return (req, res, next) => {
@@ -456,14 +479,13 @@ router.post(
   "/:id/contract/submit",
   loadContractForJob,
   requireAwardedTalent,
-  requireContractStatus("inProgress"),
+  requireContractStatus(["inProgress", "changesRequested"]),
   upload.single("file"),
   async (req, res) => {
     const { deliverableNote, deliverableUrl } = req.body ?? {};
-
-    let deliverableFilePath = req.contract.deliverableFilePath;
+    let filePath = null;
     if (req.file) {
-      deliverableFilePath = await uploadDeliverableFile({
+      filePath = await uploadDeliverableFile({
         contractId: req.contract.id,
         buffer: req.file.buffer,
         originalName: req.file.originalname,
@@ -471,24 +493,8 @@ router.post(
       });
     }
 
-    const submittedAt = new Date();
-    const updated = await prisma.contract.update({
-      where: { id: req.contract.id },
-      data: {
-        status: "submitted",
-        deliverableNote: typeof deliverableNote === "string" ? deliverableNote : req.contract.deliverableNote,
-        deliverableUrl: typeof deliverableUrl === "string" ? deliverableUrl : req.contract.deliverableUrl,
-        deliverableFilePath,
-        submittedAt,
-        reviewDueAt: new Date(submittedAt.getTime() + lifecycle.WINDOWS.reviewMs),
-      },
-    });
-    await lifecycle.recordEvent(prisma, {
-      jobId: req.job.id,
-      contractId: req.contract.id,
-      type: "submitted",
-      meta: { reviewDueAt: updated.reviewDueAt, hasFile: Boolean(deliverableFilePath), hasLink: Boolean(updated.deliverableUrl) },
-    });
+    const result = await changes.submitDelivery({ contractId: req.contract.id, note: deliverableNote, url: deliverableUrl, filePath });
+    if (!result.ok) return res.status(result.status).json({ error: result.error });
 
     // Tell the client what was delivered and exactly how long they have.
     const client = await prisma.user.findUnique({ where: { id: req.job.clientId } });
@@ -497,13 +503,14 @@ router.post(
         .sendDeliveryAwaitingReview({
           to: client.email,
           jobTitle: req.job.title,
-          reviewDueAt: updated.reviewDueAt,
+          reviewDueAt: result.contract.reviewDueAt,
           autoRelease: lifecycle.autoReleaseEnabled(),
+          version: result.version,
         })
         .catch((err) => console.error("submit: failed to email the client:", err));
     }
 
-    return res.json({ contract: await serializeContract(updated) });
+    return res.json({ contract: await serializeContract(result.contract) });
   },
 );
 
@@ -528,5 +535,34 @@ router.post(
     return res.json({ contract: await serializeContract(result.contract) });
   },
 );
+
+/** Every delivery version, extension request and change round, oldest first. */
+router.get("/:id/contract/history", loadContractForJob, requireParty, async (req, res) => {
+  const contractId = req.contract.id;
+  const [deliveries, extensions, changeRequests] = await Promise.all([
+    prisma.contractDelivery.findMany({ where: { contractId }, orderBy: { version: "asc" } }),
+    prisma.contractExtension.findMany({ where: { contractId }, orderBy: { requestedAt: "asc" } }),
+    prisma.changeRequest.findMany({ where: { contractId }, orderBy: { round: "asc" } }),
+  ]);
+  return res.json({
+    deliveries: await Promise.all(
+      deliveries.map(async (d) => ({
+        version: d.version,
+        note: d.note,
+        url: d.url,
+        fileUrl: d.filePath ? await getDeliverableFileSignedUrl(d.filePath) : null,
+        submittedAt: d.submittedAt,
+      })),
+    ),
+    extensions: extensions.map(serializeExtension),
+    changeRequests: changeRequests.map((c) => ({
+      round: c.round,
+      reason: c.reason,
+      requestedAt: c.requestedAt,
+      resubmitDueAt: c.resubmitDueAt,
+      resubmittedAt: c.resubmittedAt,
+    })),
+  });
+});
 
 module.exports = { router };

@@ -32,3 +32,22 @@ describe("POST /jobs delivery days", () => {
     assert.equal(ok.json.job.deliveryDays, 7);
   });
 });
+
+describe("contract history", () => {
+  it("client and awarded talent can read it; anyone else gets 403", async () => {
+    const s = await h.seedSubmitted(ctx);
+    const path = `/jobs/${s.job.id}/contract/history`;
+    const asClient = await h.call(server.base, ct, "GET", path);
+    assert.equal(asClient.status, 200);
+    assert.deepEqual(asClient.json.deliveries.map((d) => d.version), [1]);
+    assert.equal((await h.call(server.base, tt, "GET", path)).status, 200);
+    assert.equal((await h.call(server.base, tb, "GET", path)).status, 403);
+  });
+
+  it("a talent can resubmit over HTTP from changesRequested", async () => {
+    const s = await h.seedSubmitted(ctx, { changeRounds: 1, contract: { status: "changesRequested", reviewDueAt: null, changeDueAt: h.future() } });
+    const r = await post(tt, `/jobs/${s.job.id}/contract/submit`, { deliverableNote: "v2" });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(r.json.contract.status, "submitted");
+  });
+});

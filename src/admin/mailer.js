@@ -202,10 +202,13 @@ function sendAwardCancelledToTalent({ to, jobTitle }) {
 }
 
 /** Work was delivered: say exactly how long the client has and what happens next. */
-function sendDeliveryAwaitingReview({ to, jobTitle, reviewDueAt, autoRelease }) {
+function sendDeliveryAwaitingReview({ to, jobTitle, reviewDueAt, autoRelease, version = 1 }) {
   return send({
     to,
-    subject: `Work delivered on "${jobTitle}": please review`,
+    subject:
+      version > 1
+        ? `Revised work delivered on "${jobTitle}" (version ${version}): please review`
+        : `Work delivered on "${jobTitle}": please review`,
     html: autoRelease
       ? `
       <p>The talent has delivered <strong>${escapeHtml(jobTitle)}</strong>.</p>
