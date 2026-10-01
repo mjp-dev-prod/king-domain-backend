@@ -244,6 +244,45 @@ function sendPaymentAutoReleasedToClient({ to, jobTitle }) {
   });
 }
 
+/** The talent asked for more time; silence for 48 h grants it. */
+function sendExtensionRequested({ to, jobTitle, days, reason, proposedDeliverBy, answerDueAt }) {
+  return send({
+    to,
+    subject: `Extension requested on "${jobTitle}"`,
+    html: `
+      <p>The talent working on <strong>${escapeHtml(jobTitle)}</strong> has asked for ${days} more day${days === 1 ? "" : "s"}, which would move the delivery date to <strong>${formatWAT(proposedDeliverBy)}</strong>.</p>
+      <p>Their reason: "${escapeHtml(reason)}"</p>
+      <p>Please grant or decline it in the app by <strong>${formatWAT(answerDueAt)}</strong>. If you don't answer by then, it is granted automatically.</p>
+    `,
+    fallbackContext: `extension requested for ${to}: ${jobTitle}`,
+  });
+}
+
+const EXTENSION_OUTCOMES = {
+  granted: (date) => `The client granted your extension. The new delivery date is <strong>${formatWAT(date)}</strong>.`,
+  autoGranted: (date) =>
+    `The client didn't answer within 48 hours, so your extension was granted automatically. The new delivery date is <strong>${formatWAT(date)}</strong>.`,
+  declined: (date) => `The client declined your extension. The delivery date stays <strong>${formatWAT(date)}</strong>.`,
+};
+
+function sendExtensionAnswered({ to, jobTitle, outcome, deliverByAt }) {
+  return send({
+    to,
+    subject: outcome === "declined" ? `Extension declined on "${jobTitle}"` : `Extension granted on "${jobTitle}"`,
+    html: `<p><strong>${escapeHtml(jobTitle)}</strong>: ${EXTENSION_OUTCOMES[outcome](deliverByAt)}</p>`,
+    fallbackContext: `extension ${outcome} for ${to}: ${jobTitle}`,
+  });
+}
+
+function sendExtensionAutoGrantedToClient({ to, jobTitle, deliverByAt }) {
+  return send({
+    to,
+    subject: `Extension granted on "${jobTitle}"`,
+    html: `<p>You didn't answer the talent's extension request on <strong>${escapeHtml(jobTitle)}</strong> within 48 hours, so it was granted automatically, as agreed. The new delivery date is <strong>${formatWAT(deliverByAt)}</strong>.</p>`,
+    fallbackContext: `extension auto-granted (client) for ${to}: ${jobTitle}`,
+  });
+}
+
 /** App users (talent/client): the code ResetPasswordScreen collects. */
 function sendUserPasswordResetCode({ to, code, expiresInMinutes }) {
   return send({
@@ -285,4 +324,7 @@ module.exports = {
   sendDeliveryAwaitingReview,
   sendPaymentAutoReleasedToTalent,
   sendPaymentAutoReleasedToClient,
+  sendExtensionRequested,
+  sendExtensionAnswered,
+  sendExtensionAutoGrantedToClient,
 };

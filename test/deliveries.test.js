@@ -46,9 +46,10 @@ describe("delivery versions", () => {
 
   it("two simultaneous deliveries: exactly one version is recorded", async () => {
     const s = await h.seedWorking(ctx);
+    const racing = { prisma: h.barrierPrisma("contract", "findUnique") };
     const results = await Promise.all([
-      changes.submitDelivery({ contractId: s.c.id, note: "a" }),
-      changes.submitDelivery({ contractId: s.c.id, note: "b" }),
+      changes.submitDelivery({ contractId: s.c.id, note: "a" }, racing),
+      changes.submitDelivery({ contractId: s.c.id, note: "b" }, racing),
     ]);
     assert.equal(results.filter((r) => r.ok).length, 1);
     assert.equal(await prisma.contractDelivery.count({ where: { contractId: s.c.id } }), 1);

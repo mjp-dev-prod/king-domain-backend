@@ -49,6 +49,11 @@ async function submitDelivery({ contractId, note, url, filePath }, deps) {
     await trx.contractDelivery.create({
       data: { contractId: contract.id, version: next, note: cleanNote, url: cleanUrl, filePath: filePath ?? null, submittedAt: at },
     });
+    // Delivering makes an open extension request moot.
+    await trx.contractExtension.updateMany({
+      where: { contractId: contract.id, status: "pending" },
+      data: { status: "withdrawn", resolvedAt: at },
+    });
     if (resubmission) {
       await trx.changeRequest.updateMany({
         where: { contractId: contract.id, round: contract.changeRounds, resubmittedAt: null },

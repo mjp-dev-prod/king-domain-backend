@@ -105,6 +105,39 @@ function scopedPrisma() {
 }
 
 /** Records every email the code tries to send, whatever the template. */
+/**
+ * A prisma client whose `model.method` holds its first `n` callers until all
+ * of them have arrived, then lets them go together. Without it, two
+ * "simultaneous" calls in a test can simply run one after the other, and a
+ * race test passes even with its guard removed.
+ */
+function barrierPrisma(model, method, n = 2) {
+  let waiting = [];
+  let released = false;
+  const gate = () =>
+    released
+      ? Promise.resolve()
+      : new Promise((resolve) => {
+          waiting.push(resolve);
+          if (waiting.length >= n) {
+            released = true;
+            waiting.forEach((r) => r());
+          }
+        });
+  const bind = (t, k) => (typeof t[k] === "function" ? t[k].bind(t) : t[k]);
+  const wrapped = new Proxy(prisma[model], {
+    get: (t, k) =>
+      k === method
+        ? async (args) => {
+            const result = await t[method](args);
+            await gate();
+            return result;
+          }
+        : bind(t, k),
+  });
+  return new Proxy(prisma, { get: (t, k) => (k === model ? wrapped : bind(t, k)) });
+}
+
 function spyMailer() {
   const sent = [];
   return new Proxy(
@@ -231,4 +264,4 @@ const call = async (base, tok, method, p, body) => {
   return { status: r.status, json: await r.json().catch(() => null) };
 };
 
-module.exports = { prisma, CATEGORY, TITLE_PREFIX, past, future, fakeProvider, serveFakeProvider, scopedPrisma, spyMailer, fixtures, seedAward, seedWorking, seedSubmitted, DAY_MS, tokenFor, startServer, call };
+module.exports = { prisma, CATEGORY, TITLE_PREFIX, past, future, fakeProvider, serveFakeProvider, scopedPrisma, barrierPrisma, spyMailer, fixtures, seedAward, seedWorking, seedSubmitted, DAY_MS, tokenFor, startServer, call };

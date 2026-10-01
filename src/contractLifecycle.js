@@ -13,6 +13,7 @@ const realPaystack = require("./paystack");
 const realMailer = require("./admin/mailer");
 const { confirmFunding } = require("./contractFunding");
 const { HOUR, RULES, autoReleaseEnabled, recordEvent } = require("./contractCore");
+const extensions = require("./contractExtensions");
 
 const IN_FLIGHT_TRANSACTION_STATUSES = new Set(["ongoing", "pending", "processing", "queued"]);
 const WINDOWS = {
@@ -271,6 +272,10 @@ async function autoReleaseOne(contractId, deps) {
 
 // ── The tick ─────────────────────────────────────────────────────────────
 
+// Stage 2 sweeps, run after the stage 1 work on every tick. Each starts from
+// prisma.contract.findMany, so a test can scope a whole tick to its own rows.
+const STAGE2_SWEEPS = [["extensions", (deps) => extensions.sweepExtensions(deps)]];
+
 let ticking = false;
 
 /** One pass over everything whose clock has run out. Safe to run repeatedly. */
@@ -310,7 +315,15 @@ async function runTick(deps) {
       }
     }
 
-    if (summary.voided || summary.released || summary.failed || summary.waiting) {
+    for (const [name, sweep] of STAGE2_SWEEPS) {
+      try {
+        Object.assign(summary, await sweep(deps));
+      } catch (err) {
+        console.error(`tick: ${name} sweep failed:`, err);
+      }
+    }
+
+    if (Object.values(summary).some(Boolean)) {
       console.log(`tick: ${JSON.stringify(summary)}`);
     }
     return summary;

@@ -10,6 +10,7 @@ const lifecycle = require("../contractLifecycle");
 const mailer = require("../admin/mailer");
 const { RULES } = require("../contractCore");
 const changes = require("../contractChanges");
+const extensions = require("../contractExtensions");
 
 const router = express.Router();
 router.use(requireUser);
@@ -535,6 +536,32 @@ router.post(
     return res.json({ contract: await serializeContract(result.contract) });
   },
 );
+
+router.post("/:id/contract/extension", loadContractForJob, requireAwardedTalent, async (req, res) => {
+  const result = await extensions.requestExtension({
+    contractId: req.contract.id,
+    days: Number(req.body?.days),
+    reason: req.body?.reason,
+  });
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+  return res.status(201).json({ extension: serializeExtension(result.extension) });
+});
+
+router.post("/:id/contract/extension/:extensionId/answer", loadContractForJob, requireClient, async (req, res) => {
+  if (req.job.clientId !== req.user.id) return res.status(403).json({ error: "Not your job." });
+  const decision = req.body?.decision;
+  if (decision !== "grant" && decision !== "decline") {
+    return res.status(400).json({ error: "decision must be 'grant' or 'decline'." });
+  }
+  const result = await extensions.answerExtension({
+    contractId: req.contract.id,
+    extensionId: req.params.extensionId,
+    clientId: req.user.id,
+    grant: decision === "grant",
+  });
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+  return res.json({ contract: await serializeContract(result.contract) });
+});
 
 /** Every delivery version, extension request and change round, oldest first. */
 router.get("/:id/contract/history", loadContractForJob, requireParty, async (req, res) => {

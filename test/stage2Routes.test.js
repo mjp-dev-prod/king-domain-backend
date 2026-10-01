@@ -51,3 +51,20 @@ describe("contract history", () => {
     assert.equal(r.json.contract.status, "submitted");
   });
 });
+
+describe("extension routes", () => {
+  it("talent asks (201), other talent can't (403), client can't ask (403); client answers (200), talent can't answer (403)", async () => {
+    const s = await h.seedWorking(ctx, { deliveryDays: 5 });
+    const ask = (tok) => post(tok, `/jobs/${s.job.id}/contract/extension`, { days: 2, reason: "Waiting on the client's assets." });
+    assert.equal((await ask(tb)).status, 403);
+    assert.equal((await ask(ct)).status, 403);
+    const asked = await ask(tt);
+    assert.equal(asked.status, 201, JSON.stringify(asked.json));
+    const answer = (tok, decision) => post(tok, `/jobs/${s.job.id}/contract/extension/${asked.json.extension.id}/answer`, { decision });
+    assert.equal((await answer(tt, "grant")).status, 403);
+    assert.equal((await answer(ct, "maybe")).status, 400);
+    const granted = await answer(ct, "grant");
+    assert.equal(granted.status, 200, JSON.stringify(granted.json));
+    assert.ok(granted.json.contract.deliverByAt);
+  });
+});
