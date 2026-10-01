@@ -292,6 +292,13 @@ model User {
   /// random token: this is read aloud/typed from an email, not a link.
   verificationCodeHash     String?
   verificationCodeExpiresAt DateTime?
+  /// Forgot-password code, kept separate from the email-verification code
+  /// so requesting one can't clobber the other. Hash only, 15-minute life,
+  /// and dead after 5 wrong guesses — a 6-digit code is only safe because
+  /// of that attempt cap.
+  passwordResetCodeHash      String?
+  passwordResetCodeExpiresAt DateTime?
+  passwordResetAttempts      Int       @default(0)
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 

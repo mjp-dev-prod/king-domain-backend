@@ -265,6 +265,153 @@ router.post("/auth/logout", async (req, res) => {
   return res.json({ ok: true });
 });
 
+// ── Forgot password ──────────────────────────────────────
+// Follows OWASP's Forgot Password Cheat Sheet: identical response whether
+// or not the account exists, short-lived single-use code stored as a hash,
+// attempt cap, every session revoked on success, no auto-login.
+
+const PASSWORD_RESET_TTL_MINUTES = 15;
+const PASSWORD_RESET_MAX_ATTEMPTS = 5;
+const PASSWORD_RESET_RESEND_COOLDOWN_MS = 60 * 1000;
+const INVALID_RESET_CODE = "That code is incorrect or has expired. Request a new one if you need to.";
+
+function resetEmailKey(req) {
+  const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+  return email || `ip:${req.ip}`;
+}
+
+function sameHash(a, b) {
+  const x = Buffer.from(a, "hex");
+  const y = Buffer.from(b, "hex");
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+
+async function issuePasswordResetCode(email) {
+  const user = await prisma.user.findUnique({ where: { email } });
+  if (!user) {
+    console.log("forgot-password: no account for submitted email — nothing sent");
+    return;
+  }
+
+  const issuedAt = user.passwordResetCodeExpiresAt
+    ? user.passwordResetCodeExpiresAt.getTime() - PASSWORD_RESET_TTL_MINUTES * 60 * 1000
+    : null;
+  if (issuedAt && Date.now() - issuedAt < PASSWORD_RESET_RESEND_COOLDOWN_MS) {
+    console.log(`forgot-password: user=${user.id} code issued ${Date.now() - issuedAt}ms ago — cooldown, not re-sent`);
+    return;
+  }
+
+  const code = generateVerificationCode();
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      passwordResetCodeHash: hashCode(code),
+      passwordResetCodeExpiresAt: new Date(Date.now() + PASSWORD_RESET_TTL_MINUTES * 60 * 1000),
+      passwordResetAttempts: 0,
+    },
+  });
+  const result = await mailer.sendUserPasswordResetCode({ to: user.email, code, expiresInMinutes: PASSWORD_RESET_TTL_MINUTES });
+  console.log(`forgot-password: user=${user.id} code issued, emailSent=${result.sent}`);
+}
+
+router.post(
+  "/auth/forgot-password",
+  // Per email address is the real limit (no inbox flooding); the per-IP one
+  // is loose on purpose, because Nigerian carriers put thousands of phones
+  // behind one shared address.
+  rateLimit({ windowMs: 60 * 60 * 1000, max: 5, key: "user_forgot_password_email", by: (req) => resetEmailKey(req) }),
+  rateLimit({ windowMs: 15 * 60 * 1000, max: 30, key: "user_forgot_password" }),
+  async (req, res) => {
+    const { email } = req.body ?? {};
+    if (typeof email !== "string" || !email.includes("@")) {
+      return res.status(400).json({ error: "Enter a valid email address." });
+    }
+
+    // Not awaited: the reply must take the same time whether or not the
+    // account exists, so the lookup and email happen after responding.
+    issuePasswordResetCode(email.trim().toLowerCase()).catch((err) =>
+      console.error("forgot-password: failed to issue code:", err),
+    );
+    return res.json({ ok: true });
+  },
+);
+
+router.post(
+  "/auth/reset-password",
+  // Guessing is capped per code (5 attempts); this only stops scripted abuse.
+  rateLimit({ windowMs: 15 * 60 * 1000, max: 30, key: "user_reset_password" }),
+  async (req, res) => {
+    const { email, code, newPassword } = req.body ?? {};
+    if (typeof email !== "string" || typeof code !== "string" || !code.trim()) {
+      return res.status(400).json({ error: "Email and code are required." });
+    }
+    if (typeof newPassword !== "string" || newPassword.length < MIN_PASSWORD_LENGTH) {
+      return res.status(400).json({ error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` });
+    }
+
+    const user = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
+    const usable =
+      user?.passwordResetCodeHash &&
+      user.passwordResetCodeExpiresAt > new Date() &&
+      user.passwordResetAttempts < PASSWORD_RESET_MAX_ATTEMPTS;
+    if (!usable) {
+      console.log(`reset-password: rejected — account=${Boolean(user)} codeLive=${Boolean(usable)}`);
+      return res.status(400).json({ error: INVALID_RESET_CODE });
+    }
+
+    // Count the guess before checking it, conditionally on the cap, so
+    // parallel guesses can't all slip in under the limit.
+    const counted = await prisma.user.updateMany({
+      where: {
+        id: user.id,
+        passwordResetCodeHash: user.passwordResetCodeHash,
+        passwordResetAttempts: { lt: PASSWORD_RESET_MAX_ATTEMPTS },
+      },
+      data: { passwordResetAttempts: { increment: 1 } },
+    });
+    const matches = sameHash(hashCode(code.trim()), user.passwordResetCodeHash);
+    console.log(
+      `reset-password: user=${user.id} attemptsBefore=${user.passwordResetAttempts} counted=${counted.count} match=${matches}`,
+    );
+    if (counted.count === 0 || !matches) {
+      return res.status(400).json({ error: INVALID_RESET_CODE });
+    }
+
+    // Conditional on the same code hash: of two simultaneous correct
+    // submissions only one changes the password.
+    const passwordHash = await auth.hashPassword(newPassword);
+    const changed = await prisma.user.updateMany({
+      where: { id: user.id, passwordResetCodeHash: user.passwordResetCodeHash },
+      data: {
+        passwordHash,
+        passwordResetCodeHash: null,
+        passwordResetCodeExpiresAt: null,
+        passwordResetAttempts: 0,
+        // Receiving the code proves they own the inbox.
+        emailVerified: true,
+      },
+    });
+    if (changed.count === 0) {
+      return res.status(400).json({ error: INVALID_RESET_CODE });
+    }
+
+    const revoked = await prisma.userSession.updateMany({
+      where: { userId: user.id, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    const readBack = await prisma.user.findUnique({ where: { id: user.id } });
+    console.log(
+      `reset-password: user=${user.id} passwordChanged=${readBack.passwordHash === passwordHash} ` +
+        `codeCleared=${readBack.passwordResetCodeHash === null} sessionsRevoked=${revoked.count}`,
+    );
+
+    mailer.sendUserPasswordChanged({ to: user.email }).catch((err) =>
+      console.error("reset-password: failed to send changed notice:", err),
+    );
+    return res.json({ ok: true });
+  },
+);
+
 router.get("/me", requireUser, async (req, res) => {
   return res.json({ user: publicUser(req.user) });
 });

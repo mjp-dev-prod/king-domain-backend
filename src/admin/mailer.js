@@ -127,10 +127,38 @@ function sendVerificationCode({ to, code }) {
   });
 }
 
+/** App users (talent/client): the code ResetPasswordScreen collects. */
+function sendUserPasswordResetCode({ to, code, expiresInMinutes }) {
+  return send({
+    to,
+    subject: `${code} is your King Domain password reset code`,
+    html: `
+      <p>Use this code to reset your King Domain password:</p>
+      <p style="font-size:28px;font-weight:700;letter-spacing:4px;">${code}</p>
+      <p>It expires in ${expiresInMinutes} minutes. If you didn't ask to reset your password, ignore this email — your password stays the same.</p>
+    `,
+    fallbackContext: `password reset code for ${to}: ${code}`,
+  });
+}
+
+function sendUserPasswordChanged({ to }) {
+  return send({
+    to,
+    subject: "Your King Domain password was changed",
+    html: `
+      <p>Your King Domain password was just changed, and every device signed in to your account has been signed out.</p>
+      <p>If this wasn't you, reset your password again from the app straight away.</p>
+    `,
+    fallbackContext: `password changed notice for ${to}`,
+  });
+}
+
 module.exports = {
   sendPasswordReset,
   sendInvite,
   sendNewDecisionNotice,
   sendCommentDigest,
   sendVerificationCode,
+  sendUserPasswordResetCode,
+  sendUserPasswordChanged,
 };
