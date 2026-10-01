@@ -17,10 +17,14 @@ const sweeper = setInterval(() => {
 }, SWEEP_INTERVAL_MS);
 sweeper.unref();
 
-function rateLimit({ windowMs, max, key = "default" }) {
+/**
+ * `by` overrides the IP key — e.g. `(req) => req.user.id` on signed-in
+ * routes, where many Nigerian mobile users share one carrier IP.
+ */
+function rateLimit({ windowMs, max, key = "default", by }) {
   return (req, res, next) => {
-    const ip = req.ip || req.socket?.remoteAddress || "unknown";
-    const bucketKey = `${key}:${ip}`;
+    const identity = by ? by(req) : req.ip || req.socket?.remoteAddress || "unknown";
+    const bucketKey = `${key}:${identity}`;
     const now = Date.now();
 
     let bucket = buckets.get(bucketKey);
