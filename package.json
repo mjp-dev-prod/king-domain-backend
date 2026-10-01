@@ -9,7 +9,7 @@
     "db:push": "node scripts/db-push.js db push",
     "db:migrate": "node scripts/db-push.js migrate dev",
     "db:studio": "node scripts/db-push.js studio",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --env-file-if-exists=.env.test --test --test-concurrency=1 \"test/*.test.js\""
   },
   "keywords": [],
   "author": "",

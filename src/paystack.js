@@ -10,7 +10,8 @@
 // sending" (transfer OTP) is off in the Paystack business's Preferences —
 // a per-business setting. With it on, POST /transfer returns status `otp`
 // and the approve route refuses to mark the contract paid.
-const PAYSTACK_BASE = "https://api.paystack.co";
+// Overridable only so the test suite can point the real client at a local fake.
+const PAYSTACK_BASE = process.env.PAYSTACK_BASE_URL || "https://api.paystack.co";
 
 const configured = Boolean(process.env.PAYSTACK_SECRET_KEY);
 

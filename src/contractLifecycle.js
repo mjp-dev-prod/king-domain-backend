@@ -14,12 +14,19 @@ const realMailer = require("./admin/mailer");
 const { confirmFunding } = require("./contractFunding");
 
 const HOUR = 60 * 60 * 1000;
+const IN_FLIGHT_TRANSACTION_STATUSES = new Set(["ongoing", "pending", "processing", "queued"]);
 const WINDOWS = {
   paymentMs: 24 * HOUR,
   reviewMs: 3 * 24 * HOUR,
   // A bank transfer can still be settling after the client leaves checkout,
   // so cancellation waits this long after the latest checkout was opened.
   checkoutGraceMs: 30 * 60 * 1000,
+  // Paystack reports `ongoing` while a customer is mid bank-transfer and
+  // `pending`/`processing` while a charge settles. Cancellation waits for
+  // those, but never longer than this past the deadline: the docs don't say
+  // how long `ongoing` can last, and a payment that still lands afterwards is
+  // caught as an orphan payment.
+  inFlightHardCapMs: 6 * HOUR,
   autoReleaseRetryMs: HOUR,
   autoReleaseMaxAttempts: 24,
 };
@@ -172,6 +179,7 @@ async function voidUnpaidAward(contractId, deps) {
     take: 10,
   });
   const references = [...new Set([contract.paystackReference, ...checkouts.map((c) => c.meta?.reference)].filter(Boolean))];
+  let inFlight = null;
   for (const reference of references) {
     let verified;
     try {
@@ -180,11 +188,17 @@ async function voidUnpaidAward(contractId, deps) {
       console.error(`void: could not verify ${reference} with Paystack, leaving contract ${contract.id} for the next tick: ${err.message}`);
       return { outcome: "verify_failed" };
     }
+    // A paid checkout anywhere in the list wins over one that is merely still in flight.
     if (verified.status === "success") {
       const funded = await confirmFunding({ reference: verified.reference, amountKobo: verified.amountKobo, source: "void-check" });
       console.log(`void: contract=${contract.id} was actually paid (reference=${reference}) — funded instead of cancelled, outcome=${funded.outcome}`);
       return { outcome: "was_paid" };
     }
+    if (!inFlight && IN_FLIGHT_TRANSACTION_STATUSES.has(verified.status)) inFlight = { reference, status: verified.status };
+  }
+  if (inFlight && at - contract.payByAt < WINDOWS.inFlightHardCapMs) {
+    console.log(`void: contract=${contract.id} reference=${inFlight.reference} is ${inFlight.status} at Paystack, waiting rather than cancelling`);
+    return { outcome: "payment_in_flight" };
   }
 
   const application = contract.job.awardedApplicationId
