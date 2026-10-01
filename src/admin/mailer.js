@@ -127,6 +127,42 @@ function sendVerificationCode({ to, code }) {
   });
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/** A reviewer approved a talent's proof — they can now apply in that category. */
+function sendProofVerified({ to, title, category }) {
+  return send({
+    to,
+    subject: `You're verified in ${category} on King Domain`,
+    html: `
+      <p>Your proof of work <strong>${escapeHtml(title)}</strong> was reviewed and accepted.</p>
+      <p>You're now <strong>Verified in ${escapeHtml(category)}</strong>, so you can apply to ${escapeHtml(category)} jobs in the app.</p>
+    `,
+    fallbackContext: `proof verified notice for ${to}: ${title}`,
+  });
+}
+
+/** A reviewer turned a proof down — tell the talent why and what to do next. */
+function sendProofRejected({ to, title, category, reason }) {
+  return send({
+    to,
+    subject: `Your ${category} proof needs another look`,
+    html: `
+      <p>Your proof of work <strong>${escapeHtml(title)}</strong> (${escapeHtml(category)}) wasn't accepted.</p>
+      <p><strong>Reviewer's note:</strong> ${escapeHtml(reason)}</p>
+      <p>It has been removed from your profile. Upload a new sample from the Profile tab and it will be reviewed again.</p>
+    `,
+    fallbackContext: `proof rejected notice for ${to}: ${title} — ${reason}`,
+  });
+}
+
 /** App users (talent/client): the code ResetPasswordScreen collects. */
 function sendUserPasswordResetCode({ to, code, expiresInMinutes }) {
   return send({
@@ -161,4 +197,6 @@ module.exports = {
   sendVerificationCode,
   sendUserPasswordResetCode,
   sendUserPasswordChanged,
+  sendProofVerified,
+  sendProofRejected,
 };
