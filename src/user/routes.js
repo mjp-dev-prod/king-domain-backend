@@ -5,6 +5,7 @@ const { prisma } = require("../db");
 const { rateLimit } = require("../admin/rateLimit");
 const mailer = require("../admin/mailer");
 const { uploadProofFile, getProofFileSignedUrl } = require("../storage");
+const paystack = require("../paystack");
 const auth = require("./auth");
 const jwtUtil = require("./jwt");
 
@@ -110,6 +111,16 @@ async function serializeTalentProfile(profile) {
     bio: profile.bio,
     skillCategories: profile.skillCategories,
     proofItems: await Promise.all(profile.proofItems.map(serializeProofItem)),
+    // Masked — never send the full account number back down. Presence of
+    // bankAccountName is what the app uses to know payout setup is done;
+    // the raw number/recipientCode never leave the server.
+    bankAccount: profile.bankAccountNumber
+      ? {
+          bankName: profile.bankName,
+          accountName: profile.bankAccountName,
+          accountNumberLast4: profile.bankAccountNumber.slice(-4),
+        }
+      : null,
   };
 }
 
@@ -508,5 +519,105 @@ router.delete("/me/proof-items/:id", requireUser, requireTalentProfile, async (r
   await prisma.proofItem.delete({ where: { id: item.id } });
   return res.json({ ok: true });
 });
+
+// ── Payouts — bank account setup (see src/paystack.js) ────
+
+/** Nigerian banks, for the client-side picker. Not user-scoped — no auth needed beyond signed-in. */
+router.get("/banks", requireUser, async (req, res) => {
+  try {
+    const banks = await paystack.listBanks();
+    return res.json({ banks });
+  } catch (err) {
+    console.error("routes: listBanks failed:", err);
+    return res.status(502).json({ error: "Could not reach the bank list right now." });
+  }
+});
+
+/**
+ * Look-up only, nothing saved: returns the account holder's name so the
+ * talent can confirm it's theirs before POST /me/bank-account commits it —
+ * same as adding a payee in a banking app. Rate limited: it returns real
+ * people's names for arbitrary account numbers through our Paystack key.
+ */
+router.post(
+  "/me/bank-account/resolve",
+  requireUser,
+  rateLimit({ windowMs: 15 * 60 * 1000, max: 20, key: "user_bank_resolve", by: (req) => req.user.id }),
+  requireTalentProfile,
+  async (req, res) => {
+    const { accountNumber, bankCode } = req.body ?? {};
+    if (typeof accountNumber !== "string" || !/^\d{10}$/.test(accountNumber.trim())) {
+      return res.status(400).json({ error: "Enter a 10-digit account number." });
+    }
+    if (typeof bankCode !== "string" || !bankCode.trim()) {
+      return res.status(400).json({ error: "bankCode is required." });
+    }
+
+    try {
+      const resolved = await paystack.resolveAccountNumber({ accountNumber: accountNumber.trim(), bankCode: bankCode.trim() });
+      return res.json({ accountName: resolved.accountName });
+    } catch (err) {
+      return res.status(400).json({ error: err.message || "Could not verify that account number." });
+    }
+  },
+);
+
+/**
+ * Re-resolves the account (never trusts a name sent from the app), creates
+ * a Paystack transfer recipient, and saves. Called again if a talent
+ * changes their bank details; overwrites the old recipientCode rather than
+ * keeping stale ones around.
+ */
+router.post(
+  "/me/bank-account",
+  requireUser,
+  rateLimit({ windowMs: 15 * 60 * 1000, max: 10, key: "user_bank_save", by: (req) => req.user.id }),
+  requireTalentProfile,
+  async (req, res) => {
+    const { accountNumber, bankCode } = req.body ?? {};
+
+    if (typeof accountNumber !== "string" || !accountNumber.trim()) {
+      return res.status(400).json({ error: "accountNumber is required." });
+    }
+    if (typeof bankCode !== "string" || !bankCode.trim()) {
+      return res.status(400).json({ error: "bankCode is required." });
+    }
+
+    let resolved;
+    try {
+      resolved = await paystack.resolveAccountNumber({ accountNumber: accountNumber.trim(), bankCode: bankCode.trim() });
+    } catch (err) {
+      return res.status(400).json({ error: err.message || "Could not verify that account number." });
+    }
+
+    const banks = await paystack.listBanks().catch(() => []);
+    const bankName = banks.find((b) => b.code === bankCode.trim())?.name ?? null;
+
+    let recipient;
+    try {
+      recipient = await paystack.createTransferRecipient({
+        accountNumber: resolved.accountNumber,
+        bankCode: bankCode.trim(),
+        accountName: resolved.accountName,
+      });
+    } catch (err) {
+      return res.status(502).json({ error: err.message || "Could not set up payouts for this account." });
+    }
+
+    const updated = await prisma.talentProfile.update({
+      where: { id: req.talentProfile.id },
+      data: {
+        bankAccountNumber: resolved.accountNumber,
+        bankCode: bankCode.trim(),
+        bankName,
+        bankAccountName: resolved.accountName,
+        paystackRecipientCode: recipient.recipientCode,
+      },
+      include: { proofItems: { orderBy: { createdAt: "desc" } } },
+    });
+
+    return res.json({ profile: await serializeTalentProfile(updated) });
+  },
+);
 
 module.exports = { router, requireUser, requireTalentProfile };

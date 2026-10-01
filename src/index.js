@@ -14,6 +14,7 @@ const adminProofReview = require("./admin/proofReviewRoutes");
 const appRoutes = require("./app/appRoutes");
 const { startNotificationScheduler } = require("./admin/notifications");
 const mcpAdmin = require("./mcp-admin/mcp-admin.routes");
+const paystackWebhook = require("./webhooks/paystackWebhook");
 
 const app = express();
 const port = process.env.PORT || 4000;
@@ -45,6 +46,12 @@ app.use((req, res, next) => {
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
+
+// Mounted BEFORE express.json() — HMAC signature verification needs the
+// exact raw request bytes Paystack signed, which express.json() would
+// otherwise consume and re-serialize differently. See the router's own
+// comment for why a re-serialized JSON.stringify(req.body) silently fails.
+app.use("/webhooks/paystack", paystackWebhook.router);
 
 app.use(express.json());
 
