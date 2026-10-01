@@ -163,6 +163,84 @@ function sendProofRejected({ to, title, category, reason }) {
   });
 }
 
+/** Dates in emails are shown in Nigerian time, the audience's own clock. */
+function formatWAT(date) {
+  return new Date(date).toLocaleString("en-NG", {
+    timeZone: "Africa/Lagos",
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+/** The client awarded a job but didn't pay within 24 hours. */
+function sendAwardCancelledToClient({ to, jobTitle }) {
+  return send({
+    to,
+    subject: `Your award on "${jobTitle}" was cancelled`,
+    html: `
+      <p>You selected someone for <strong>${escapeHtml(jobTitle)}</strong> but the job wasn't paid for within 24 hours, so the award has been cancelled.</p>
+      <p>The job is open again and every applicant is back under consideration. Nothing was charged. You can award it again from the app whenever you're ready to pay.</p>
+    `,
+    fallbackContext: `award cancelled (client) for ${to}: ${jobTitle}`,
+  });
+}
+
+/** Tell the talent their award fell through, without blaming anyone. */
+function sendAwardCancelledToTalent({ to, jobTitle }) {
+  return send({
+    to,
+    subject: `"${jobTitle}": the client didn't pay in time`,
+    html: `
+      <p>You were selected for <strong>${escapeHtml(jobTitle)}</strong>, but the client didn't pay within 24 hours, so the award was cancelled and the job is open again.</p>
+      <p>You're back in the running for it, and you can keep applying to other jobs. You didn't lose anything: work only starts once a job is paid for.</p>
+    `,
+    fallbackContext: `award cancelled (talent) for ${to}: ${jobTitle}`,
+  });
+}
+
+/** Work was delivered: say exactly how long the client has and what happens next. */
+function sendDeliveryAwaitingReview({ to, jobTitle, reviewDueAt, autoRelease }) {
+  return send({
+    to,
+    subject: `Work delivered on "${jobTitle}": please review`,
+    html: autoRelease
+      ? `
+      <p>The talent has delivered <strong>${escapeHtml(jobTitle)}</strong>.</p>
+      <p>Please review it in the app by <strong>${formatWAT(reviewDueAt)}</strong>. If you don't respond by then, payment is released to the talent automatically.</p>
+    `
+      : `
+      <p>The talent has delivered <strong>${escapeHtml(jobTitle)}</strong>. Please review it in the app and approve it to release payment.</p>
+    `,
+    fallbackContext: `delivery awaiting review for ${to}: ${jobTitle}`,
+  });
+}
+
+function sendPaymentAutoReleasedToTalent({ to, jobTitle }) {
+  return send({
+    to,
+    subject: `You've been paid for "${jobTitle}"`,
+    html: `
+      <p>The client didn't respond within the review period, so payment for <strong>${escapeHtml(jobTitle)}</strong> was released to your bank account automatically.</p>
+      <p>Transfers can take a little while to show in your account.</p>
+    `,
+    fallbackContext: `auto-release paid (talent) for ${to}: ${jobTitle}`,
+  });
+}
+
+function sendPaymentAutoReleasedToClient({ to, jobTitle }) {
+  return send({
+    to,
+    subject: `Payment released for "${jobTitle}"`,
+    html: `
+      <p>You didn't review the delivery of <strong>${escapeHtml(jobTitle)}</strong> within the review period, so payment was released to the talent automatically, as agreed when the job was awarded.</p>
+    `,
+    fallbackContext: `auto-release paid (client) for ${to}: ${jobTitle}`,
+  });
+}
+
 /** App users (talent/client): the code ResetPasswordScreen collects. */
 function sendUserPasswordResetCode({ to, code, expiresInMinutes }) {
   return send({
@@ -199,4 +277,9 @@ module.exports = {
   sendUserPasswordChanged,
   sendProofVerified,
   sendProofRejected,
+  sendAwardCancelledToClient,
+  sendAwardCancelledToTalent,
+  sendDeliveryAwaitingReview,
+  sendPaymentAutoReleasedToTalent,
+  sendPaymentAutoReleasedToClient,
 };

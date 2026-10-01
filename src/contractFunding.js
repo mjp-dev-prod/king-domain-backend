@@ -28,6 +28,24 @@ async function confirmFunding({ reference, amountKobo, source }) {
       : null);
 
   if (!contract) {
+    // A payment landing after the 24h window cancelled the award (a slow
+    // transfer that settled late): the money is in our balance but the
+    // contract is gone. Never drop it silently — leave a record and an alarm
+    // so it gets refunded by hand until refunds are built.
+    const cancelledId = contractIdFromReference(reference);
+    const voided = cancelledId
+      ? await prisma.contractEvent.findFirst({ where: { contractId: cancelledId, type: "award_voided" } })
+      : null;
+    if (voided) {
+      console.error(
+        `contractFunding[${source}]: ORPHAN PAYMENT needs manual refund — reference=${reference} ` +
+          `paid=${fromKobo(amountKobo)} contract=${cancelledId} job=${voided.jobId} (award was cancelled unpaid)`,
+      );
+      await prisma.contractEvent.create({
+        data: { jobId: voided.jobId, contractId: cancelledId, type: "late_payment_after_void", meta: { reference, amountKobo, source } },
+      });
+      return { outcome: "orphanPayment", contract: null };
+    }
     console.warn(`contractFunding[${source}]: no contract for reference=${reference}`);
     return { outcome: "notOurs", contract: null };
   }

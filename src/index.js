@@ -13,6 +13,7 @@ const adminAppReleases = require("./admin/appReleaseRoutes");
 const adminProofReview = require("./admin/proofReviewRoutes");
 const appRoutes = require("./app/appRoutes");
 const { startNotificationScheduler } = require("./admin/notifications");
+const { startContractScheduler } = require("./contractLifecycle");
 const mcpAdmin = require("./mcp-admin/mcp-admin.routes");
 const paystackWebhook = require("./webhooks/paystackWebhook");
 
@@ -116,4 +117,5 @@ app.use((err, req, res, _next) => {
 app.listen(port, () => {
   console.log(`King Domain backend listening on port ${port}`);
   startNotificationScheduler();
+  startContractScheduler();
 });

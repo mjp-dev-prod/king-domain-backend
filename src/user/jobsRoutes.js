@@ -6,6 +6,8 @@ const { requireUser, requireTalentProfile } = require("./routes");
 const { uploadDeliverableFile, getDeliverableFileSignedUrl } = require("../storage");
 const paystack = require("../paystack");
 const { confirmFunding } = require("../contractFunding");
+const lifecycle = require("../contractLifecycle");
+const mailer = require("../admin/mailer");
 
 const router = express.Router();
 router.use(requireUser);
@@ -68,6 +70,12 @@ async function serializeContract(contract) {
     paymentFailed: contract.paymentFailed,
     fundedAt: contract.fundedAt,
     transferredAt: contract.transferredAt,
+    // Deadlines the apps show. reviewDueAt is only sent while auto-release is
+    // actually on, so the app never promises an automatic payment that
+    // won't happen.
+    payByAt: contract.payByAt,
+    submittedAt: contract.submittedAt,
+    reviewDueAt: lifecycle.autoReleaseEnabled() ? contract.reviewDueAt : null,
     deliverableNote: contract.deliverableNote,
     deliverableUrl: contract.deliverableUrl,
     deliverableFileUrl: contract.deliverableFilePath
@@ -246,8 +254,21 @@ router.post("/:id/applications/:applicationId/award", requireClient, async (req,
       data: { status: "notSelected" },
     }),
     prisma.job.update({ where: { id: job.id }, data: { awardedApplicationId: winning.id } }),
-    prisma.contract.create({ data: { jobId: job.id, status: "awaitingPayment", platformFeeAmount } }),
+    prisma.contract.create({
+      data: {
+        jobId: job.id,
+        status: "awaitingPayment",
+        platformFeeAmount,
+        payByAt: new Date(Date.now() + lifecycle.WINDOWS.paymentMs),
+      },
+    }),
   ]);
+  await lifecycle.recordEvent(prisma, {
+    jobId: job.id,
+    contractId: contract.id,
+    type: "awarded",
+    meta: { applicationId: winning.id, payByAt: contract.payByAt },
+  });
 
   return res.status(201).json({ contract: await serializeContract(contract) });
 });
@@ -286,6 +307,12 @@ router.post(
       }
     }
 
+    if (req.contract.payByAt && req.contract.payByAt < new Date()) {
+      return res.status(400).json({
+        error: "The 24-hour payment window for this award has ended. The award will be cancelled shortly and you can award the job again.",
+      });
+    }
+
     const totalAmount = Number(req.job.budget) + Number(req.contract.platformFeeAmount);
     const reference = `kd_${req.contract.id}_${crypto.randomBytes(4).toString("hex")}`;
 
@@ -303,7 +330,15 @@ router.post(
 
     await prisma.contract.update({
       where: { id: req.contract.id },
-      data: { paystackReference: checkout.reference, paymentFailed: false },
+      data: { paystackReference: checkout.reference, paymentFailed: false, checkoutStartedAt: new Date() },
+    });
+    // Every checkout ever opened is remembered, so cancelling an unpaid award
+    // can check all of them with Paystack, not just the latest.
+    await lifecycle.recordEvent(prisma, {
+      jobId: req.job.id,
+      contractId: req.contract.id,
+      type: "checkout_started",
+      meta: { reference: checkout.reference },
     });
 
     return res.json({ funded: false, authorizationUrl: checkout.authorizationUrl, reference: checkout.reference });
@@ -419,6 +454,7 @@ router.post(
       });
     }
 
+    const submittedAt = new Date();
     const updated = await prisma.contract.update({
       where: { id: req.contract.id },
       data: {
@@ -426,40 +462,39 @@ router.post(
         deliverableNote: typeof deliverableNote === "string" ? deliverableNote : req.contract.deliverableNote,
         deliverableUrl: typeof deliverableUrl === "string" ? deliverableUrl : req.contract.deliverableUrl,
         deliverableFilePath,
+        submittedAt,
+        reviewDueAt: new Date(submittedAt.getTime() + lifecycle.WINDOWS.reviewMs),
       },
     });
+    await lifecycle.recordEvent(prisma, {
+      jobId: req.job.id,
+      contractId: req.contract.id,
+      type: "submitted",
+      meta: { reviewDueAt: updated.reviewDueAt, hasFile: Boolean(deliverableFilePath), hasLink: Boolean(updated.deliverableUrl) },
+    });
+
+    // Tell the client what was delivered and exactly how long they have.
+    const client = await prisma.user.findUnique({ where: { id: req.job.clientId } });
+    if (client) {
+      mailer
+        .sendDeliveryAwaitingReview({
+          to: client.email,
+          jobTitle: req.job.title,
+          reviewDueAt: updated.reviewDueAt,
+          autoRelease: lifecycle.autoReleaseEnabled(),
+        })
+        .catch((err) => console.error("submit: failed to email the client:", err));
+    }
+
     return res.json({ contract: await serializeContract(updated) });
   },
 );
 
-// Statuses where money is, or may still be, moving — never start another
-// transfer on top of one of these.
-const LIVE_TRANSFER_STATUSES = new Set(["success", "pending", "otp", "received"]);
-
 /**
- * Payout references are kd_payout_<contractId>_<n>, one per attempt.
- * Returns the first attempt that is still live (reuse it, don't pay again)
- * or the first unused reference after conclusively failed ones (failed,
- * reversed, abandoned, ...). Two concurrent approvals land on the same next
- * reference, so Paystack's duplicate-reference check stops a double payout.
- */
-async function findPayoutAttempt(contractId) {
-  for (let n = 1; n <= 10; n++) {
-    const reference = `kd_payout_${contractId}_${n}`;
-    const existing = await paystack.verifyTransfer(reference);
-    if (!existing || LIVE_TRANSFER_STATUSES.has(existing.status)) return { reference, existing };
-  }
-  throw new Error("Too many failed payout attempts for this contract — check the Paystack dashboard.");
-}
-
-/**
- * Approving is the real "release payment" action. Moves Job.budget
- * (never budget + fee — the fee stays in our balance) out to the awarded
- * talent's saved Paystack recipient. Only `success`/`pending` mean the
- * money is actually on its way; anything else (notably `otp`, when
- * "Confirm transfers before sending" is still on in the Paystack business's
- * Preferences) leaves the contract `submitted` so nobody is told they've
- * been paid when they haven't.
+ * Approving is the real "release payment" action; the 3-day auto-release
+ * uses the very same code (contractLifecycle.releasePayment): the job budget
+ * (never budget + fee) goes to the awarded talent, and the contract only
+ * becomes approved if Paystack accepts the transfer.
  */
 router.post(
   "/:id/contract/approve",
@@ -471,50 +506,9 @@ router.post(
       return res.status(403).json({ error: "Not your job." });
     }
 
-    const application = await prisma.application.findUnique({ where: { id: req.job.awardedApplicationId } });
-    const talentProfile = await prisma.talentProfile.findUnique({ where: { userId: application.talentId } });
-
-    if (!talentProfile?.paystackRecipientCode) {
-      return res.status(400).json({ error: "The talent hasn't set up a payout bank account yet." });
-    }
-
-    let attempt;
-    let transfer;
-    try {
-      attempt = await findPayoutAttempt(req.contract.id);
-      transfer =
-        attempt.existing ??
-        (await paystack.initiateTransfer({
-          amountNaira: req.job.budget,
-          recipientCode: talentProfile.paystackRecipientCode,
-          reference: attempt.reference,
-          reason: `Payment for "${req.job.title}"`,
-        }));
-    } catch (err) {
-      return res.status(502).json({ error: err.message || "Could not release payment right now." });
-    }
-
-    console.log(
-      `approve: contract=${req.contract.id} reference=${attempt.reference} reused=${Boolean(attempt.existing)} ` +
-        `transfer=${transfer.transferCode} status=${transfer.status}`,
-    );
-    if (transfer.status === "otp" || transfer.status === "received") {
-      console.error(
-        `approve: PAYOUT NOT SENT — ${attempt.reference} is waiting on transfer approval (status=${transfer.status}). ` +
-          `Turn off "Confirm transfers before sending" in Paystack Preferences. contract=${req.contract.id}`,
-      );
-      return res.status(502).json({ error: "Payment couldn't be released yet. Please try again later." });
-    }
-    if (transfer.status !== "success" && transfer.status !== "pending") {
-      console.error(`approve: PAYOUT NOT SENT — ${attempt.reference} status=${transfer.status} contract=${req.contract.id}`);
-      return res.status(502).json({ error: "Payment couldn't be released right now. Please try again shortly." });
-    }
-
-    const updated = await prisma.contract.update({
-      where: { id: req.contract.id },
-      data: { status: "approved", paystackTransferCode: transfer.transferCode, transferredAt: new Date() },
-    });
-    return res.json({ contract: await serializeContract(updated) });
+    const result = await lifecycle.releasePayment({ contractId: req.contract.id, trigger: "client_approved" });
+    if (!result.ok) return res.status(result.status).json({ error: result.error });
+    return res.json({ contract: await serializeContract(result.contract) });
   },
 );
 

@@ -411,6 +411,7 @@ model Job {
 
   applications Application[]
   contract     Contract?
+  events       ContractEvent[]
 
   @@index([category])
   @@map("jobs")
@@ -476,6 +477,12 @@ model Contract {
   /// passed to POST /transaction/initialize. Overwritten on each new
   /// checkout; older references still match via the embedded contract id.
   paystackReference       String?    @unique
+  /// Award timestamp + 24h: unpaid by then and the award cancels itself
+  /// (src/contractLifecycle.js). Nullable for contracts made before this existed.
+  payByAt                 DateTime?
+  /// When the latest checkout was opened. A payment may still be in flight
+  /// (bank transfer), so cancellation waits 30 min past it.
+  checkoutStartedAt       DateTime?
   /// When contractFunding.js confirmed the payment with Paystack.
   fundedAt                DateTime?
   /// Paystack's transfer_code for the payout, set when the transfer is
@@ -491,8 +498,34 @@ model Contract {
   // talent who wants to paste an external link (e.g. a Drive/Figma link)
   // instead of uploading a file.
   deliverableFilePath String?
+  /// Set when the talent submits. reviewDueAt = submittedAt + 3 days: the
+  /// date the client is told payment auto-releases if they do nothing.
+  submittedAt         DateTime?
+  reviewDueAt         DateTime?
+  /// Auto-release retries: a refused transfer is retried hourly up to a cap,
+  /// then left for an admin.
+  autoReleaseAttempts      Int       @default(0)
+  lastAutoReleaseAttemptAt DateTime?
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
 
   @@map("contracts")
+}
+
+/// Append-only record of what happened to a job's money, kept even when the
+/// Contract row is deleted (a cancelled award deletes it). contractId is plain
+/// text, not a foreign key, for that reason. Evidence for disputes, and how a
+/// late payment on a cancelled award is traced back to its job.
+model ContractEvent {
+  id         String   @id @default(uuid())
+  jobId      String
+  job        Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  contractId String
+  type       String
+  meta       Json?
+  createdAt  DateTime @default(now())
+
+  @@index([jobId, createdAt])
+  @@index([contractId])
+  @@map("contract_events")
 }
