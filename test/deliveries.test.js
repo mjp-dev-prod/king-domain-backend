@@ -36,6 +36,16 @@ describe("delivery versions", () => {
     assert.equal(r.code, "empty_delivery");
   });
 
+  it("refuses links that aren't web addresses (the client's app opens them)", async () => {
+    const s = await h.seedWorking(ctx);
+    for (const url of ["javascript:alert(1)", "file:///etc/passwd", "intent://x#Intent;end", "https://", "drive.google.com/x"]) {
+      const r = await changes.submitDelivery({ contractId: s.c.id, note: "Final files", url });
+      assert.equal(r.code, "bad_link", url);
+    }
+    const ok = await changes.submitDelivery({ contractId: s.c.id, note: "Final files", url: "https://drive.google.com/file/d/abc" });
+    assert.equal(ok.ok, true);
+  });
+
   it("can't deliver before starting or after delivering", async () => {
     for (const status of ["funded", "submitted", "approved", "disputed"]) {
       const s = await h.seedWorking(ctx, { status });

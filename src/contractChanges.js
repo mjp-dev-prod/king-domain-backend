@@ -20,6 +20,10 @@ async function submitDelivery({ contractId, note, url, filePath }, deps) {
   if (!cleanNote && !cleanUrl && !filePath) {
     return refuse(400, "empty_delivery", "Add a note, a link or a file to deliver.");
   }
+  // The client's app opens this link, so only web links get through.
+  if (cleanUrl && !/^https?:\/\/[^\s/]+\.[^\s]+$/i.test(cleanUrl)) {
+    return refuse(400, "bad_link", "The link must be a web address starting with https://.");
+  }
 
   const contract = await prisma.contract.findUnique({ where: { id: contractId } });
   if (!contract) return refuse(404, "not_found", "Contract not found.");
