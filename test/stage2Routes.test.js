@@ -80,3 +80,36 @@ describe("request-changes route", () => {
     assert.equal(r.json.escalated, false);
   });
 });
+
+describe("applicant signals (correction-talent-discovery-screen.md)", () => {
+  it("the client sees verified proof in the job's category only, and a plain completed-jobs count", async () => {
+    const profileA = await prisma.talentProfile.findUnique({ where: { userId: ctx.talentA.id } });
+    await prisma.proofItem.deleteMany({ where: { talentProfileId: profileA.id } });
+    await prisma.proofItem.createMany({
+      data: [
+        { talentProfileId: profileA.id, category: h.CATEGORY, title: "Verified in category", status: "verified" },
+        { talentProfileId: profileA.id, category: h.CATEGORY, title: "Still in review", status: "pending" },
+        { talentProfileId: profileA.id, category: "Software & tech", title: "Other category", status: "verified" },
+      ],
+    });
+    // One job talent A already completed.
+    await h.seedSubmitted(ctx, { contract: { status: "approved" } });
+
+    const job = await prisma.job.create({ data: { clientId: ctx.client.id, title: `${h.TITLE_PREFIX}signals`, category: h.CATEGORY, description: "d", budget: 1000, deliveryDays: 5 } });
+    await prisma.application.create({ data: { jobId: job.id, talentId: ctx.talentA.id } });
+    await prisma.application.create({ data: { jobId: job.id, talentId: ctx.talentB.id } });
+
+    const r = await h.call(server.base, ct, "GET", `/jobs/${job.id}/applications`);
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    const [a, b] = r.json.applications;
+    assert.equal(a.talent.id, ctx.talentA.id, "in the order they applied");
+    assert.equal(a.signals.verifiedInCategory, true);
+    assert.deepEqual(a.signals.proof.map((p) => p.title), ["Verified in category"], "pending and other-category proof never shown");
+    assert.equal(a.signals.jobsCompleted, 1);
+    assert.equal(b.signals.verifiedInCategory, false);
+    assert.deepEqual(b.signals.proof, []);
+    assert.equal(b.signals.jobsCompleted, 0);
+
+    await prisma.proofItem.deleteMany({ where: { talentProfileId: profileA.id } });
+  });
+});

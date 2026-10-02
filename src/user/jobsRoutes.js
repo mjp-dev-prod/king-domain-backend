@@ -3,7 +3,7 @@ const multer = require("multer");
 const crypto = require("node:crypto");
 const { prisma } = require("../db");
 const { requireUser, requireTalentProfile } = require("./routes");
-const { uploadDeliverableFile, getDeliverableFileSignedUrl } = require("../storage");
+const { uploadDeliverableFile, getDeliverableFileSignedUrl, getProofFileSignedUrl } = require("../storage");
 const paystack = require("../paystack");
 const { confirmFunding } = require("../contractFunding");
 const lifecycle = require("../contractLifecycle");
@@ -61,6 +61,34 @@ function serializeApplication(app) {
     talent: app.talent
       ? { id: app.talent.id, fullName: app.talent.fullName, email: app.talent.email }
       : undefined,
+  };
+}
+
+/**
+ * What a client weighs an applicant on (correction-talent-discovery-screen.md):
+ * real, non-manipulable facts only. Verified status in this job's category,
+ * up to three of their verified work samples in it (short-lived signed
+ * links), and a plain count of jobs they've completed. No score, no rank.
+ */
+async function applicantSignals(talent, category) {
+  const profile = talent?.talentProfile;
+  const verifiedProof = (profile?.proofItems ?? []).filter((p) => p.category === category && p.status === "verified");
+  const jobsCompleted = talent
+    ? await prisma.contract.count({
+        where: { status: "approved", job: { applications: { some: { talentId: talent.id, status: "selected" } } } },
+      })
+    : 0;
+  return {
+    headline: profile?.headline || null,
+    verifiedInCategory: verifiedProof.length > 0,
+    proof: await Promise.all(
+      verifiedProof.slice(0, 3).map(async (p) => ({
+        id: p.id,
+        title: p.title,
+        fileUrl: p.filePath ? await getProofFileSignedUrl(p.filePath) : null,
+      })),
+    ),
+    jobsCompleted,
   };
 }
 
@@ -239,12 +267,14 @@ router.get("/:id/applications", requireClient, async (req, res) => {
     return res.status(403).json({ error: "Not your job." });
   }
 
+  // In the order they applied: no ranking (docs/core/correction-talent-discovery-screen.md).
   const applications = await prisma.application.findMany({
     where: { jobId: job.id },
     orderBy: { createdAt: "asc" },
-    include: { talent: true },
+    include: { talent: { include: { talentProfile: { include: { proofItems: true } } } } },
   });
-  return res.json({ applications: applications.map(serializeApplication) });
+  const signals = await Promise.all(applications.map((a) => applicantSignals(a.talent, job.category)));
+  return res.json({ applications: applications.map((a, i) => ({ ...serializeApplication(a), signals: signals[i] })) });
 });
 
 /**
