@@ -62,6 +62,23 @@ describe("reserved test domains are never emailed (they only bounce)", () => {
     assert.equal(captured.length, 0, "nothing may be sent to Brevo");
   });
 
+  it("the skip is logged without the email's subject, which carries the code", async () => {
+    const lines = [];
+    const original = console.log;
+    console.log = (...args) => lines.push(args.join(" "));
+    try {
+      await mailer.sendVerificationCode({ to: "chinedu.demo@example.com", code: "482913" });
+      await mailer.sendUserPasswordResetCode({ to: "chinedu.demo@example.com", code: "482913", expiresInMinutes: 15 });
+    } finally {
+      console.log = original;
+    }
+    assert.equal(lines.length, 2);
+    for (const line of lines) {
+      assert.match(line, /skipped: chinedu\.demo@example\.com/);
+      assert.ok(!line.includes("482913"), `a code leaked into the log: ${line}`);
+    }
+  });
+
   it("an email to a real address is still sent", async () => {
     captured.length = 0;
     const r = await mailer.sendVerificationCode({ to: "someone@gmail.com", code: "123456" });

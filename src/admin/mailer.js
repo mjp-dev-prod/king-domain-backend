@@ -47,7 +47,8 @@ async function send({ to, subject, html, fallbackContext }) {
   // After the not-configured branch on purpose: local development without
   // credentials still prints the link or code, as it always has.
   if (isReservedRecipient(to)) {
-    console.log(`[mailer] skipped: ${to} is on a reserved test domain and would only bounce (${subject})`);
+    // Never log the subject: for verification and reset emails it contains the code.
+    console.log(`[mailer] skipped: ${to} is on a reserved test domain and would only bounce`);
     return { sent: false, skipped: "reserved_address" };
   }
 
