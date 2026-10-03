@@ -12,6 +12,8 @@ const adminDecisions = require("./admin/decisionRoutes");
 const adminAppReleases = require("./admin/appReleaseRoutes");
 const adminProofReview = require("./admin/proofReviewRoutes");
 const appRoutes = require("./app/appRoutes");
+const { buildCiUploadRouter } = require("./app/ciUploadRoutes");
+const storage = require("./storage");
 const { startNotificationScheduler } = require("./admin/notifications");
 const { startContractScheduler } = require("./contractLifecycle");
 const mcpAdmin = require("./mcp-admin/mcp-admin.routes");
@@ -103,6 +105,7 @@ app.use("/admin/decisions", adminDecisions.router);
 app.use("/admin/app-releases", adminAppReleases.router);
 app.use("/admin/proof-items", adminProofReview.router);
 app.use("/app", appRoutes.router);
+app.use("/app", buildCiUploadRouter({ prisma, storage }));
 app.use("/api/mcp-admin", mcpAdmin.router);
 
 // Must be registered after all routes and before any other error middleware.

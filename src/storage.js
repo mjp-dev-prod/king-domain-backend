@@ -1,5 +1,6 @@
 const { createClient } = require("@supabase/supabase-js");
-const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
+const { S3Client, PutObjectCommand, HeadObjectCommand } = require("@aws-sdk/client-s3");
+const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
 // Server-side only — the service role key bypasses row-level security, so
 // this client must never be exposed to the admin frontend or the mobile app.
@@ -74,6 +75,52 @@ async function uploadApk({ version, buffer }) {
   return `${process.env.R2_PUBLIC_URL}/${key}`;
 }
 
+const APK_CONTENT_TYPE = "application/vnd.android.package-archive";
+const APK_UPLOAD_LINK_TTL_SECONDS = 15 * 60;
+
+/** The public download URL of a release APK (the same key uploadApk writes). */
+function apkPublicUrl(version) {
+  if (!process.env.R2_PUBLIC_URL) {
+    throw new Error("R2_PUBLIC_URL is not set — required to build a downloadable APK URL.");
+  }
+  return `${process.env.R2_PUBLIC_URL}/${apkKey(version)}`;
+}
+
+/**
+ * A one-use upload link so CI can send the APK straight to R2 instead of
+ * through this server. A ~50 MB multipart upload through a small free web
+ * service behind a proxy was unreliable (connections reset mid-upload, or the
+ * server answered before the file arrived); R2 takes a 50 MB PUT without
+ * trouble. The link is for one key, expires in 15 minutes and is useless for
+ * anything else in the bucket.
+ */
+async function presignApkUpload({ version }) {
+  if (!r2) {
+    throw new Error("R2 is not configured — set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY.");
+  }
+  const key = apkKey(version);
+  const uploadUrl = await getSignedUrl(
+    r2,
+    new PutObjectCommand({ Bucket: R2_BUCKET, Key: key, ContentType: APK_CONTENT_TYPE }),
+    { expiresIn: APK_UPLOAD_LINK_TTL_SECONDS },
+  );
+  return { uploadUrl, key, apkUrl: apkPublicUrl(version), contentType: APK_CONTENT_TYPE, expiresInSeconds: APK_UPLOAD_LINK_TTL_SECONDS };
+}
+
+/** Size in bytes of the stored APK for [version], or null if nothing is there. */
+async function apkObjectSize({ version }) {
+  if (!r2) {
+    throw new Error("R2 is not configured — set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY.");
+  }
+  try {
+    const head = await r2.send(new HeadObjectCommand({ Bucket: R2_BUCKET, Key: apkKey(version) }));
+    return head.ContentLength ?? 0;
+  } catch (err) {
+    if (err?.name === "NotFound" || err?.$metadata?.httpStatusCode === 404) return null;
+    throw err;
+  }
+}
+
 /**
  * Upload a file to a private bucket and return its **storage path**, not a
  * public URL — both proof-items and deliverables are personal work
@@ -145,6 +192,9 @@ function getDeliverableFileSignedUrl(path, expiresInSeconds = 300) {
 
 module.exports = {
   apkKey,
+  apkPublicUrl,
+  presignApkUpload,
+  apkObjectSize,
   uploadApk,
   uploadProofFile,
   getProofFileSignedUrl,
