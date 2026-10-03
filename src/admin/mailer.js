@@ -17,6 +17,22 @@ const SENDER = {
   email: process.env.BREVO_SENDER_EMAIL,
 };
 
+// Domains reserved for documentation and testing (RFC 2606): mail to them is
+// never delivered, so sending only produces a bounce. Staging's demo accounts
+// live on example.com, and bounces count against the one Brevo account and
+// sender address that production shares.
+const RESERVED_DOMAINS = ["example.com", "example.net", "example.org"];
+const RESERVED_TLDS = ["test", "example", "invalid", "localhost"];
+
+function isReservedRecipient(address) {
+  const text = String(address ?? "");
+  const at = text.lastIndexOf("@");
+  if (at < 0) return false;
+  const domain = text.slice(at + 1).trim().toLowerCase().replace(/\.$/, "");
+  if (RESERVED_DOMAINS.some((d) => domain === d || domain.endsWith("." + d))) return true;
+  return RESERVED_TLDS.includes(domain.slice(domain.lastIndexOf(".") + 1));
+}
+
 /**
  * Send an email if Brevo is configured; otherwise log the link so local dev
  * and any environment without credentials still works — invites and resets
@@ -26,6 +42,13 @@ async function send({ to, subject, html, fallbackContext }) {
   if (!configured) {
     console.log(`[mailer] BREVO_API_KEY/BREVO_SENDER_EMAIL not set — ${fallbackContext}`);
     return { sent: false };
+  }
+
+  // After the not-configured branch on purpose: local development without
+  // credentials still prints the link or code, as it always has.
+  if (isReservedRecipient(to)) {
+    console.log(`[mailer] skipped: ${to} is on a reserved test domain and would only bounce (${subject})`);
+    return { sent: false, skipped: "reserved_address" };
   }
 
   try {
@@ -402,6 +425,7 @@ function sendUserPasswordChanged({ to }) {
 }
 
 module.exports = {
+  isReservedRecipient,
   sendPasswordReset,
   sendInvite,
   sendNewDecisionNotice,

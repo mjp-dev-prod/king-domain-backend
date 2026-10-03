@@ -32,7 +32,7 @@ describe("stage 2 emails", () => {
   for (const [fn, args] of cases) {
     it(`${fn}${args.kind ? ` (${args.kind})` : ""}: escapes user text and states the date`, async () => {
       captured.length = 0;
-      const r = await mailer[fn]({ to: "a@example.com", jobTitle: EVIL, ...args });
+      const r = await mailer[fn]({ to: "a@stubbed-brevo.dev", jobTitle: EVIL, ...args });
       assert.equal(r.sent, true);
       const html = captured[0].htmlContent;
       assert.ok(!html.includes("<script>"), "raw script tag in html");
@@ -41,6 +41,32 @@ describe("stage 2 emails", () => {
   }
 
   it("an unknown reminder kind throws instead of sending nonsense", async () => {
-    await assert.rejects(() => mailer.sendClockReminder({ to: "a@example.com", kind: "nope", jobTitle: "x", dueAt: due }));
+    await assert.rejects(() => mailer.sendClockReminder({ to: "a@stubbed-brevo.dev", kind: "nope", jobTitle: "x", dueAt: due }));
+  });
+});
+
+describe("reserved test domains are never emailed (they only bounce)", () => {
+  it("recognises the reserved domains, their subdomains and reserved TLDs, and nothing real", () => {
+    for (const reserved of ["ada.demo@example.com", "a@EXAMPLE.org", "a@example.net", "a@mail.example.com", "a@kingdomain.test", "a@x.invalid", "a@foo.example", "a@host.localhost", "a@example.com."]) {
+      assert.equal(mailer.isReservedRecipient(reserved), true, reserved);
+    }
+    for (const real of ["ayeniv69@gmail.com", "ayeniv69+kdreset@gmail.com", "kehindealo18@gmail.com", "a@notexample.com", "a@example.com.ng", "a@mytest.io", "a@stubbed-brevo.dev", "no-at-sign", ""]) {
+      assert.equal(mailer.isReservedRecipient(real), false, real);
+    }
+  });
+
+  it("an email to a demo account makes no Brevo request and says it was skipped", async () => {
+    captured.length = 0;
+    const r = await mailer.sendVerificationCode({ to: "chinedu.demo@example.com", code: "123456" });
+    assert.deepEqual(r, { sent: false, skipped: "reserved_address" });
+    assert.equal(captured.length, 0, "nothing may be sent to Brevo");
+  });
+
+  it("an email to a real address is still sent", async () => {
+    captured.length = 0;
+    const r = await mailer.sendVerificationCode({ to: "someone@gmail.com", code: "123456" });
+    assert.equal(r.sent, true);
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0].to[0].email, "someone@gmail.com");
   });
 });
