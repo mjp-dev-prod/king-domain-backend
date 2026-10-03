@@ -39,12 +39,25 @@ const R2_BUCKET = process.env.R2_APK_BUCKET || "king-domain-releases";
  * version is treated as replacing a bad build, not an error — R2's
  * PutObjectCommand overwrites by default, no explicit upsert flag needed).
  */
+/**
+ * The object key for a release APK. Staging shares the production bucket, so
+ * it sets R2_APK_PREFIX (e.g. "staging/"): without it a staging release
+ * "1.3.0" would overwrite production's king-domain-1.3.0.apk. Unset keeps
+ * production's keys exactly as they have always been.
+ */
+function apkKey(version, prefix = process.env.R2_APK_PREFIX || "") {
+  if (prefix && !/^[a-z0-9-]+\/$/.test(prefix)) {
+    throw new Error(`R2_APK_PREFIX must look like "staging/" (got "${prefix}").`);
+  }
+  return `${prefix}king-domain-${version}.apk`;
+}
+
 async function uploadApk({ version, buffer }) {
   if (!r2) {
     throw new Error("R2 is not configured — set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY.");
   }
 
-  const key = `king-domain-${version}.apk`;
+  const key = apkKey(version);
 
   await r2.send(
     new PutObjectCommand({
@@ -131,6 +144,7 @@ function getDeliverableFileSignedUrl(path, expiresInSeconds = 300) {
 }
 
 module.exports = {
+  apkKey,
   uploadApk,
   uploadProofFile,
   getProofFileSignedUrl,

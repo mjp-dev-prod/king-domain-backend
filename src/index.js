@@ -114,8 +114,27 @@ app.use((err, req, res, _next) => {
   res.status(500).json({ error: "Something went wrong." });
 });
 
+/**
+ * Minutes between background ticks. Production keeps the defaults (contracts
+ * every 5, notification digests every 15). Hosted staging sets these to 30 so
+ * its Neon database can sleep between ticks: a 5-minute tick matches Neon's
+ * 5-minute idle timeout, so the database would never sleep and the free
+ * compute hours would run out.
+ */
+function minutesFromEnv(name, fallbackMin) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallbackMin * 60 * 1000;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1 || n > 24 * 60) {
+    throw new Error(`${name} must be a number of minutes from 1 to 1440 (got "${raw}").`);
+  }
+  return n * 60 * 1000;
+}
+const contractIntervalMs = minutesFromEnv("CONTRACT_SCHEDULER_INTERVAL_MIN", 5);
+const notificationIntervalMs = minutesFromEnv("NOTIFICATION_INTERVAL_MIN", 15);
+
 app.listen(port, () => {
   console.log(`King Domain backend listening on port ${port}`);
-  startNotificationScheduler();
-  startContractScheduler();
+  startNotificationScheduler({ intervalMs: notificationIntervalMs });
+  startContractScheduler({ intervalMs: contractIntervalMs });
 });
