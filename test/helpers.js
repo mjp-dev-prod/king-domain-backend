@@ -313,7 +313,8 @@ async function startServer({ port, paystackUrl, autoRelease = true, storageUrl }
     try {
       if ((await fetch(`${base}/health`)).ok) break;
     } catch {}
-    if (i >= 300) {
+    // 150 s: a cold Neon test branch plus the server's own start-up has taken 20 s to over a minute.
+    if (i >= 750) {
       child.kill();
       throw new Error(`test server did not start:\n${log}`);
     }
