@@ -7,14 +7,19 @@ const h = require("./helpers");
 const { prisma } = h;
 const { checkUpload } = require("../src/uploads");
 
-let ctx, server, ta, ct;
+let ctx, server, storedServer, storage, ta, ct;
 before(async () => {
   ctx = await h.fixtures();
   server = await h.startServer({ port: 4614, paystackUrl: "http://127.0.0.1:9", autoRelease: false });
+  // A second server whose storage is a local fake, so an ACCEPTED file can be followed all the way in.
+  storage = await h.serveFakeStorage();
+  storedServer = await h.startServer({ port: 4615, paystackUrl: "http://127.0.0.1:9", autoRelease: false, storageUrl: storage.url });
   [ta, ct] = await Promise.all([h.tokenFor(ctx.talentA), h.tokenFor(ctx.client)]);
 });
 after(async () => {
   server?.stop();
+  storedServer?.stop();
+  storage?.server.close();
   await prisma.job.deleteMany({ where: { title: { startsWith: h.TITLE_PREFIX } } });
   await prisma.$disconnect();
 });
@@ -23,11 +28,11 @@ const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a
 const HTML = Buffer.from("<!doctype html><script>alert(1)</script>");
 
 /** multipart POST: text fields plus any number of named files. */
-async function send(tok, path, fields, files = {}) {
+async function send(tok, path, fields, files = {}, base = server.base) {
   const form = new FormData();
   for (const [k, v] of Object.entries(fields)) form.append(k, v);
   for (const [name, { buffer, filename, type }] of Object.entries(files)) form.append(name, new Blob([buffer], { type }), filename);
-  const r = await fetch(server.base + path, { method: "POST", headers: { Authorization: `Bearer ${tok}` }, body: form });
+  const r = await fetch(base + path, { method: "POST", headers: { Authorization: `Bearer ${tok}` }, body: form });
   return { status: r.status, json: await r.json().catch(() => null) };
 }
 
@@ -135,5 +140,29 @@ describe("checkUpload (the step between reading the file and storing it)", () =>
     assert.equal(nexted, false);
     assert.equal(sent.status, 415);
     assert.equal(sent.body.code, "unsupported_file");
+  });
+});
+
+describe("an ACCEPTED file, followed into storage (against a fake Supabase)", () => {
+  it("a proof file is stored under the type its bytes show and a cleaned name, whatever the client claimed", async () => {
+    const profile = await prisma.talentProfile.findUnique({ where: { userId: ctx.talentA.id } });
+    const r = await send(ta, "/users/me/proof-items", proofFields, { file: { buffer: PNG, filename: "My Holiday.JPG", type: "text/html" } }, storedServer.base);
+    assert.equal(r.status, 201, JSON.stringify(r.json));
+    const keys = [...storage.objects.keys()].filter((k) => k.startsWith(`proof-items/${profile.id}/`));
+    assert.equal(keys.length, 1, [...storage.objects.keys()].join(", "));
+    assert.match(keys[0], /-My_Holiday\.png$/);
+    assert.equal(storage.objects.get(keys[0]).contentType, "image/png");
+    await prisma.proofItem.deleteMany({ where: { talentProfileId: profile.id } });
+  });
+
+  it("a delivered PDF is stored as application/pdf in the deliverables bucket and recorded on the contract", async () => {
+    const s = await h.seedWorking(ctx);
+    const pdf = Buffer.concat([Buffer.from("%PDF-1.7\n"), Buffer.alloc(64)]);
+    const r = await send(ta, `/jobs/${s.job.id}/contract/submit`, { deliverableNote: "Final files" }, { file: { buffer: pdf, filename: "final.exe", type: "application/x-msdownload" } }, storedServer.base);
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    const keys = [...storage.objects.keys()].filter((k) => k.startsWith(`deliverables/${s.c.id}/`));
+    assert.equal(keys.length, 1);
+    assert.match(keys[0], /-final\.pdf$/);
+    assert.equal(storage.objects.get(keys[0]).contentType, "application/pdf");
   });
 });

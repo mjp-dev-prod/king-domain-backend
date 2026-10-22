@@ -104,6 +104,69 @@ function scopedPrisma() {
   return new Proxy(prisma, { get: (target, key) => (key === "contract" ? contract : typeof target[key] === "function" ? target[key].bind(target) : target[key]) });
 }
 
+/**
+ * A Supabase Storage stand-in speaking the REST calls @supabase/storage-js really makes (checked
+ * against v2.115 in node_modules): create bucket, upload (raw body), remove by prefixes, sign, and a
+ * public GET. `objects` maps "bucket/path" to { buffer, contentType } so a test can see exactly what
+ * was stored; `faults` makes the next uploads or removals fail. The private buckets exist from the
+ * start; anything else answers "Bucket not found" until it is created, like the real service.
+ */
+function serveFakeStorage() {
+  const objects = new Map();
+  const buckets = new Map([["proof-items", { public: false }], ["deliverables", { public: false }]]);
+  const faults = { upload: false, remove: false };
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      const body = Buffer.concat(chunks);
+      const json = (code, value) => {
+        res.writeHead(code, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(value));
+      };
+      const p = decodeURIComponent(new URL(req.url, "http://x").pathname);
+      let m;
+      if (req.method === "POST" && p === "/storage/v1/bucket") {
+        const b = JSON.parse(body.toString() || "{}");
+        if (buckets.has(b.id)) return json(409, { statusCode: "409", error: "Duplicate", message: "The resource already exists" });
+        buckets.set(b.id, { public: Boolean(b.public) });
+        return json(200, { name: b.id });
+      }
+      if (req.method === "POST" && (m = p.match(/^\/storage\/v1\/object\/sign\/([^/]+)\/(.+)$/))) {
+        return json(200, { signedURL: `/object/sign/${m[1]}/${m[2]}?token=fake` });
+      }
+      if (req.method === "POST" && (m = p.match(/^\/storage\/v1\/object\/([^/]+)\/(.+)$/))) {
+        const [, bucket, path] = m;
+        if (faults.upload) return json(500, { statusCode: "500", error: "Internal", message: "upload failed" });
+        if (!buckets.has(bucket)) return json(404, { statusCode: "404", error: "Bucket not found", message: "Bucket not found" });
+        if (objects.has(`${bucket}/${path}`) && req.headers["x-upsert"] !== "true") {
+          return json(409, { statusCode: "409", error: "Duplicate", message: "The resource already exists" });
+        }
+        objects.set(`${bucket}/${path}`, { buffer: body, contentType: req.headers["content-type"] });
+        return json(200, { Id: `id-${objects.size}`, Key: `${bucket}/${path}` });
+      }
+      if (req.method === "DELETE" && (m = p.match(/^\/storage\/v1\/object\/([^/]+)$/))) {
+        if (faults.remove) return json(500, { statusCode: "500", error: "Internal", message: "remove failed" });
+        const removed = [];
+        for (const prefix of JSON.parse(body.toString() || "{}").prefixes ?? []) {
+          if (objects.delete(`${m[1]}/${prefix}`)) removed.push({ name: prefix });
+        }
+        return json(200, removed);
+      }
+      if (req.method === "GET" && (m = p.match(/^\/storage\/v1\/object\/public\/([^/]+)\/(.+)$/))) {
+        const obj = buckets.get(m[1])?.public ? objects.get(`${m[1]}/${m[2]}`) : null;
+        if (!obj) return json(404, { statusCode: "404", error: "not_found", message: "Object not found" });
+        res.writeHead(200, { "Content-Type": obj.contentType });
+        return res.end(obj.buffer);
+      }
+      json(404, { message: `fake storage: no route for ${req.method} ${p}` });
+    });
+  });
+  return new Promise((resolve) =>
+    server.listen(0, "127.0.0.1", () => resolve({ server, url: `http://127.0.0.1:${server.address().port}`, objects, buckets, faults })),
+  );
+}
+
 /** Records every email the code tries to send, whatever the template. */
 /**
  * A prisma client whose `model.method` holds its first `n` callers until all
@@ -224,7 +287,7 @@ async function seedSubmitted(ctx, { changeRounds = 0, contract = {} } = {}) {
 }
 
 /** Starts the real server against the test database, scheduler off, Paystack pointed at `paystackUrl`. */
-async function startServer({ port, paystackUrl, autoRelease = true }) {
+async function startServer({ port, paystackUrl, autoRelease = true, storageUrl }) {
   const child = spawn(process.execPath, ["src/index.js"], {
     cwd: path.join(__dirname, ".."),
     env: {
@@ -236,8 +299,9 @@ async function startServer({ port, paystackUrl, autoRelease = true }) {
       CONTRACT_SCHEDULER: "off",
       BREVO_API_KEY: "", // set-but-empty so dotenv cannot fill it from .env: no real email
       // Same for storage: a test must never write a file into the real Supabase buckets in .env.
-      SUPABASE_URL: "",
-      SUPABASE_SERVICE_ROLE_KEY: "",
+      // Off unless the test hands it a fake (serveFakeStorage).
+      SUPABASE_URL: storageUrl ?? "",
+      SUPABASE_SERVICE_ROLE_KEY: storageUrl ? "test-service-role-key" : "",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -267,4 +331,4 @@ const call = async (base, tok, method, p, body) => {
   return { status: r.status, json: await r.json().catch(() => null) };
 };
 
-module.exports = { prisma, CATEGORY, TITLE_PREFIX, past, future, fakeProvider, serveFakeProvider, scopedPrisma, barrierPrisma, spyMailer, ensureUser, fixtures, seedAward, seedWorking, seedSubmitted, DAY_MS, tokenFor, startServer, call };
+module.exports = { prisma, CATEGORY, TITLE_PREFIX, past, future, fakeProvider, serveFakeProvider, scopedPrisma, barrierPrisma, spyMailer, serveFakeStorage, ensureUser, fixtures, seedAward, seedWorking, seedSubmitted, DAY_MS, tokenFor, startServer, call };
