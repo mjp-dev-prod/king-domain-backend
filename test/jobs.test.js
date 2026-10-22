@@ -107,3 +107,34 @@ describe("editJob", () => {
     assert.equal((await edit(closed)).code, "closed");
   });
 });
+
+describe("closeJob", () => {
+  const close = (job, clientId = ctx.client.id, deps) => jobs.closeJob({ jobId: job.id, clientId }, deps);
+
+  it("closes the job and marks every pending application not selected", async () => {
+    const job = await openJob();
+    await prisma.application.create({ data: { jobId: job.id, talentId: ctx.talentA.id } });
+    await prisma.application.create({ data: { jobId: job.id, talentId: ctx.talentB.id } });
+    const r = await close(job);
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.ok(r.job.closedAt);
+    const statuses = (await prisma.application.findMany({ where: { jobId: job.id } })).map((a) => a.status);
+    assert.deepEqual(statuses, ["notSelected", "notSelected"]);
+  });
+
+  it("closes a job nobody applied to", async () => {
+    assert.equal((await close(await openJob())).ok, true);
+  });
+
+  it("is refused for another client (403), a missing job (404), a closed job and an awarded job (409)", async () => {
+    const job = await openJob();
+    assert.equal((await close(job, otherClient.id)).status, 403);
+    assert.equal((await jobs.closeJob({ jobId: "00000000-0000-0000-0000-000000000000", clientId: ctx.client.id })).status, 404);
+    assert.equal((await close(job)).ok, true);
+    assert.equal((await close(job)).code, "closed");
+    const awarded = await h.seedAward(ctx);
+    const r = await close(awarded.job);
+    assert.equal(r.code, "awarded");
+    assert.equal((await prisma.job.findUnique({ where: { id: awarded.job.id } })).closedAt, null);
+  });
+});

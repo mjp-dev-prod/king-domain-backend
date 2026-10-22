@@ -79,3 +79,38 @@ describe("PATCH /jobs/:id", () => {
     assert.equal((await api(ct, "PATCH", `/jobs/${closed.id}`, body())).json.code, "closed");
   });
 });
+
+describe("POST /jobs/:id/close and feed visibility", () => {
+  const feedIds = async (tok) => (await api(tok, "GET", "/jobs")).json.jobs.map((j) => j.id);
+
+  it("the owner closes it: closedAt is set, and the pending applicant sees it as not selected", async () => {
+    const job = await post();
+    await prisma.application.create({ data: { jobId: job.id, talentId: ctx.talentA.id } });
+    const r = await api(ct, "POST", `/jobs/${job.id}/close`);
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.ok(r.json.job.closedAt);
+    const seen = (await api(ta, "GET", "/jobs")).json.jobs.find((j) => j.id === job.id);
+    assert.equal(seen.myApplicationStatus, "notSelected");
+    assert.ok(seen.closedAt);
+  });
+
+  it("a closed job leaves the feed for talents who never applied, and stays for its owner", async () => {
+    const job = await post();
+    assert.ok((await feedIds(tb)).includes(job.id));
+    await api(ct, "POST", `/jobs/${job.id}/close`);
+    assert.ok(!(await feedIds(tb)).includes(job.id));
+    assert.ok((await feedIds(ct)).includes(job.id));
+  });
+
+  it("a talent gets 403, another client gets 403, closing twice and closing an awarded job get 409 with a code", async () => {
+    const job = await post();
+    assert.equal((await api(ta, "POST", `/jobs/${job.id}/close`)).status, 403);
+    assert.equal((await api(c2, "POST", `/jobs/${job.id}/close`)).status, 403);
+    assert.equal((await api(ct, "POST", `/jobs/${job.id}/close`)).status, 200);
+    const again = await api(ct, "POST", `/jobs/${job.id}/close`);
+    assert.equal(again.status, 409);
+    assert.equal(again.json.code, "closed");
+    const awarded = await h.seedAward(ctx);
+    assert.equal((await api(ct, "POST", `/jobs/${awarded.job.id}/close`)).json.code, "awarded");
+  });
+});

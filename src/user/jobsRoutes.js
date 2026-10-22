@@ -151,7 +151,13 @@ function requireClient(req, res, next) {
 router.get("/", async (req, res) => {
   const { category } = req.query;
   const jobs = await prisma.job.findMany({
-    where: category ? { category: String(category) } : undefined,
+    where: {
+      AND: [
+        category ? { category: String(category) } : {},
+        // A closed job stays visible to its owner and to talents who applied to it.
+        { OR: [{ closedAt: null }, { clientId: req.user.id }, { applications: { some: { talentId: req.user.id } } }] },
+      ],
+    },
     orderBy: { createdAt: "desc" },
     include: {
       client: true,
@@ -196,6 +202,13 @@ router.post("/", requireClient, async (req, res) => {
  */
 router.patch("/:id", requireClient, async (req, res) => {
   const result = await jobsService.editJob({ jobId: req.params.id, clientId: req.user.id, input: req.body });
+  if (!result.ok) return res.status(result.status).json({ error: result.error, code: result.code });
+  return res.json({ job: await serializeJob(result.job) });
+});
+
+/** Close an open job: final, hides it from other talents, ends pending applications. */
+router.post("/:id/close", requireClient, async (req, res) => {
+  const result = await jobsService.closeJob({ jobId: req.params.id, clientId: req.user.id });
   if (!result.ok) return res.status(result.status).json({ error: result.error, code: result.code });
   return res.json({ job: await serializeJob(result.job) });
 });

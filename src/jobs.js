@@ -65,4 +65,32 @@ async function editJob({ jobId, clientId, input }, deps) {
   return (await stateRefusal(prisma, job.id, { editing: true })) ?? refuse(409, "has_applicants", MSG.locked);
 }
 
-module.exports = { validateJobInput, jobInclude, loadJob, stateRefusal, editJob, MSG };
+/**
+ * The client closes their own open job: final. In one transaction the job gets
+ * closedAt (only if it is still open and unawarded) and every pending
+ * application becomes notSelected, so no applicant is left waiting on a job
+ * that will never pick anyone. An application written at the same moment
+ * either commits first (and is swept by the second statement) or finds the
+ * job closed and is refused (applyToJob).
+ */
+async function closeJob({ jobId, clientId }, deps) {
+  const { prisma, now } = baseDeps(deps);
+  const job = await prisma.job.findUnique({ where: { id: jobId } });
+  if (!job) return refuse(404, "not_found", "Job not found.");
+  if (job.clientId !== clientId) return refuse(403, "not_yours", "Not your job.");
+
+  const closed = await prisma.$transaction(async (trx) => {
+    const { count } = await trx.job.updateMany({
+      where: { id: job.id, clientId, closedAt: null, awardedApplicationId: null },
+      data: { closedAt: now() },
+    });
+    if (count === 0) return false;
+    await trx.application.updateMany({ where: { jobId: job.id, status: "pending" }, data: { status: "notSelected" } });
+    return true;
+  });
+  if (closed) return { ok: true, job: await loadJob(prisma, job.id) };
+
+  return (await stateRefusal(prisma, job.id, { editing: false })) ?? refuse(409, "closed", MSG.closed);
+}
+
+module.exports = { validateJobInput, jobInclude, loadJob, stateRefusal, editJob, closeJob, MSG };
