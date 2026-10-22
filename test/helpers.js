@@ -264,4 +264,4 @@ const call = async (base, tok, method, p, body) => {
   return { status: r.status, json: await r.json().catch(() => null) };
 };
 
-module.exports = { prisma, CATEGORY, TITLE_PREFIX, past, future, fakeProvider, serveFakeProvider, scopedPrisma, barrierPrisma, spyMailer, fixtures, seedAward, seedWorking, seedSubmitted, DAY_MS, tokenFor, startServer, call };
+module.exports = { prisma, CATEGORY, TITLE_PREFIX, past, future, fakeProvider, serveFakeProvider, scopedPrisma, barrierPrisma, spyMailer, ensureUser, fixtures, seedAward, seedWorking, seedSubmitted, DAY_MS, tokenFor, startServer, call };

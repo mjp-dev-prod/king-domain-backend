@@ -8,9 +8,9 @@ const paystack = require("../paystack");
 const { confirmFunding } = require("../contractFunding");
 const lifecycle = require("../contractLifecycle");
 const mailer = require("../admin/mailer");
-const { RULES } = require("../contractCore");
 const changes = require("../contractChanges");
 const extensions = require("../contractExtensions");
+const jobsService = require("../jobs");
 
 const router = express.Router();
 router.use(requireUser);
@@ -45,6 +45,8 @@ async function serializeJob(job, viewerApplications) {
       ? { id: job.client.id, fullName: job.client.fullName, email: job.client.email }
       : undefined,
     awardedApplicationId: job.awardedApplicationId,
+    closedAt: job.closedAt ?? null,
+    revision: job.revision ?? 0,
     applicationCount: job._count?.applications,
     myApplicationStatus: mine?.status ?? null,
     createdAt: job.createdAt,
@@ -176,41 +178,26 @@ router.get("/:id", async (req, res) => {
 });
 
 router.post("/", requireClient, async (req, res) => {
-  const { title, category, description, budget, deliveryDays } = req.body ?? {};
-
-  if (typeof title !== "string" || !title.trim()) {
-    return res.status(400).json({ error: "title is required." });
-  }
-  if (typeof category !== "string" || !category.trim()) {
-    return res.status(400).json({ error: "category is required." });
-  }
-  if (typeof description !== "string" || !description.trim()) {
-    return res.status(400).json({ error: "description is required." });
-  }
-  const budgetNum = Number(budget);
-  if (!Number.isFinite(budgetNum) || budgetNum <= 0) {
-    return res.status(400).json({ error: "budget must be a positive number." });
-  }
-  const days = Number(deliveryDays);
-  if (!Number.isInteger(days) || days < RULES.deliveryDays.min || days > RULES.deliveryDays.max) {
-    return res.status(400).json({
-      error: `deliveryDays must be a whole number of days from ${RULES.deliveryDays.min} to ${RULES.deliveryDays.max}.`,
-    });
-  }
+  const checked = jobsService.validateJobInput(req.body);
+  if (!checked.ok) return res.status(checked.status).json({ error: checked.error });
 
   const job = await prisma.job.create({
-    data: {
-      clientId: req.user.id,
-      title: title.trim(),
-      category: category.trim(),
-      description: description.trim(),
-      budget: budgetNum,
-      deliveryDays: days,
-    },
-    include: { client: true, contract: true, _count: { select: { applications: true } } },
+    data: { clientId: req.user.id, ...checked.value },
+    include: jobsService.jobInclude,
   });
 
   return res.status(201).json({ job: await serializeJob(job) });
+});
+
+/**
+ * Edit an open job nobody has applied to yet: once the first applicant applies
+ * the terms are locked and the client closes and reposts instead
+ * (docs/features/work-gaps-applications-stepper-job-edit.md in the mobile repo).
+ */
+router.patch("/:id", requireClient, async (req, res) => {
+  const result = await jobsService.editJob({ jobId: req.params.id, clientId: req.user.id, input: req.body });
+  if (!result.ok) return res.status(result.status).json({ error: result.error, code: result.code });
+  return res.json({ job: await serializeJob(result.job) });
 });
 
 // ── Applications ─────────────────────────────────────────
