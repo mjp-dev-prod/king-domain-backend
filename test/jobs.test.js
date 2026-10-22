@@ -200,3 +200,78 @@ describe("awardJob", () => {
     assert.equal((await prisma.job.findUnique({ where: { id: job.id } })).awardedApplicationId, null);
   });
 });
+
+describe("races on the job row", () => {
+  const ROUNDS = 6; // the winner is decided by timing, so run both orders several times
+  const barrier = () => ({ prisma: h.barrierPrisma("job", "findUnique") });
+
+  it("edit vs apply: exactly one wins, and an application never lands on edited terms", async () => {
+    for (let i = 0; i < ROUNDS; i++) {
+      const job = await openJob();
+      const deps = barrier();
+      const [e, a] = await Promise.all([
+        jobs.editJob({ jobId: job.id, clientId: ctx.client.id, input: input() }, deps),
+        jobs.applyToJob({ jobId: job.id, talentId: ctx.talentA.id, revision: 0 }, deps),
+      ]);
+      assert.equal([e, a].filter((r) => r.ok).length, 1, `round ${i}: ${JSON.stringify([e.code, a.code])}`);
+      const after = await prisma.job.findUnique({ where: { id: job.id } });
+      const applications = await prisma.application.count({ where: { jobId: job.id } });
+      if (e.ok) {
+        assert.equal(a.code, "terms_changed");
+        assert.equal(applications, 0);
+        assert.equal(after.revision, 1);
+      } else {
+        assert.equal(e.code, "has_applicants");
+        assert.equal(applications, 1);
+        assert.equal(after.revision, 0);
+      }
+    }
+  });
+
+  it("close vs apply: the job ends closed with no pending application, whatever the order", async () => {
+    for (let i = 0; i < ROUNDS; i++) {
+      const job = await openJob();
+      const deps = barrier();
+      const [c, a] = await Promise.all([
+        jobs.closeJob({ jobId: job.id, clientId: ctx.client.id }, deps),
+        jobs.applyToJob({ jobId: job.id, talentId: ctx.talentA.id }, deps),
+      ]);
+      assert.equal(c.ok, true, `round ${i}`);
+      assert.ok((await prisma.job.findUnique({ where: { id: job.id } })).closedAt);
+      assert.equal(await prisma.application.count({ where: { jobId: job.id, status: "pending" } }), 0, `round ${i}: a pending application survived the close`);
+      if (a.ok) assert.equal(await prisma.application.count({ where: { jobId: job.id, status: "notSelected" } }), 1);
+      else assert.equal(a.code, "closed");
+    }
+  });
+
+  it("close vs award: exactly one wins and the job is never both closed and awarded", async () => {
+    for (let i = 0; i < ROUNDS; i++) {
+      const job = await openJob();
+      const app = await prisma.application.create({ data: { jobId: job.id, talentId: ctx.talentA.id } });
+      const deps = barrier();
+      const [c, w] = await Promise.all([
+        jobs.closeJob({ jobId: job.id, clientId: ctx.client.id }, deps),
+        jobs.awardJob({ jobId: job.id, clientId: ctx.client.id, applicationId: app.id }, deps),
+      ]);
+      assert.equal([c, w].filter((r) => r.ok).length, 1, `round ${i}: ${JSON.stringify([c.code, w.code])}`);
+      const after = await prisma.job.findUnique({ where: { id: job.id } });
+      assert.ok(!(after.closedAt && after.awardedApplicationId), `round ${i}: closed AND awarded`);
+      const contracts = await prisma.contract.count({ where: { jobId: job.id } });
+      if (w.ok) {
+        assert.equal(c.code, "awarded");
+        assert.equal(contracts, 1);
+      } else {
+        assert.equal(w.code, "closed");
+        assert.equal(contracts, 0);
+      }
+    }
+  });
+
+  it("two edits at once: both can win (no applicant yet), the revision counts both", async () => {
+    const job = await openJob();
+    const deps = barrier();
+    const rs = await Promise.all([edit(job, { title: `${h.TITLE_PREFIX}one` }, ctx.client.id, deps), edit(job, { title: `${h.TITLE_PREFIX}two` }, ctx.client.id, deps)]);
+    assert.equal(rs.every((r) => r.ok), true);
+    assert.equal((await prisma.job.findUnique({ where: { id: job.id } })).revision, 2);
+  });
+});
