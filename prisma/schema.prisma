@@ -410,6 +410,16 @@ model Job {
   /// mark every other Application on this Job as not selected, not leave
   /// them ambiguously pending.
   awardedApplicationId String?
+  /// Set when the client closes the job before awarding it. A closed job is
+  /// hidden from other talents' feeds and takes no applications.
+  closedAt DateTime?
+  /// Bumped on every edit. An application carries the revision the talent
+  /// read; a mismatch means the terms changed under them (src/jobs.js).
+  revision Int @default(0)
+  /// Set by every application: the "terms are locked" marker, read by the
+  /// edit guard (a job with applications from before this column existed is
+  /// caught by `applications: none` instead).
+  lastAppliedAt DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
