@@ -1,3 +1,4 @@
+const crypto = require("node:crypto");
 const { createClient } = require("@supabase/supabase-js");
 const { S3Client, PutObjectCommand, HeadObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
@@ -190,7 +191,58 @@ function getDeliverableFileSignedUrl(path, expiresInSeconds = 300) {
   return getPrivateFileSignedUrl(DELIVERABLES_BUCKET, path, expiresInSeconds);
 }
 
+// ── Profile photos: a PUBLIC bucket ─────────────────────────────────
+// Unlike proofs and deliveries (private, links that expire in minutes), a profile photo is meant to
+// be seen by everyone, so its link is permanent and needs no sign-in. Each upload gets its own random
+// path, so a link never changes meaning and can be cached for good.
+const AVATARS_BUCKET = "avatars";
+const AVATAR_MAX_BYTES = 5 * 1024 * 1024;
+
+/** The public link for a stored photo path, built from the project URL: never stored, never stale. */
+function avatarPublicUrl(path) {
+  const base = process.env.SUPABASE_URL;
+  if (!path || !base) return null;
+  return `${base.replace(/\/+$/, "")}/storage/v1/object/public/${AVATARS_BUCKET}/${path}`;
+}
+
+async function ensureAvatarsBucket() {
+  const { error } = await supabase.storage.createBucket(AVATARS_BUCKET, {
+    public: true,
+    // Defence in depth: the storage service refuses anything else even if our checks were bypassed.
+    fileSizeLimit: AVATAR_MAX_BYTES,
+    allowedMimeTypes: ["image/jpeg", "image/png", "image/webp"],
+  });
+  if (error && !/already exists|duplicate/i.test(error.message)) {
+    throw new Error(`Supabase bucket create failed: ${error.message}`);
+  }
+}
+
+/** Stores a photo and returns its path. Creates the public bucket the first time it is needed. */
+async function uploadAvatar({ userId, buffer, contentType, extension }) {
+  if (!supabase) {
+    throw new Error("Supabase Storage is not configured — set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.");
+  }
+  const path = `${userId}/${crypto.randomUUID()}.${extension}`;
+  const put = () => supabase.storage.from(AVATARS_BUCKET).upload(path, buffer, { contentType, upsert: false, cacheControl: "31536000" });
+  let { error } = await put();
+  if (error && /bucket not found/i.test(error.message)) {
+    await ensureAvatarsBucket();
+    ({ error } = await put());
+  }
+  if (error) throw new Error(`Supabase upload failed: ${error.message}`);
+  return path;
+}
+
+async function removeAvatar(path) {
+  if (!supabase) throw new Error("Supabase Storage is not configured — set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.");
+  const { error } = await supabase.storage.from(AVATARS_BUCKET).remove([path]);
+  if (error) throw new Error(`Supabase remove failed: ${error.message}`);
+}
+
 module.exports = {
+  uploadAvatar,
+  removeAvatar,
+  avatarPublicUrl,
   apkKey,
   apkPublicUrl,
   presignApkUpload,

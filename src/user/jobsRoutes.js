@@ -3,7 +3,7 @@ const { singleFile, checkUpload } = require("../uploads");
 const crypto = require("node:crypto");
 const { prisma } = require("../db");
 const { requireUser, requireTalentProfile } = require("./routes");
-const { uploadDeliverableFile, getDeliverableFileSignedUrl, getProofFileSignedUrl } = require("../storage");
+const { uploadDeliverableFile, getDeliverableFileSignedUrl, getProofFileSignedUrl, avatarPublicUrl } = require("../storage");
 const paystack = require("../paystack");
 const { confirmFunding } = require("../contractFunding");
 const lifecycle = require("../contractLifecycle");
@@ -40,7 +40,7 @@ async function serializeJob(job, viewerApplications) {
     budget: job.budget.toString(),
     deliveryDays: job.deliveryDays ?? null,
     client: job.client
-      ? { id: job.client.id, fullName: job.client.fullName, email: job.client.email }
+      ? { id: job.client.id, fullName: job.client.fullName, email: job.client.email, photoUrl: avatarPublicUrl(job.client.photoPath) }
       : undefined,
     awardedApplicationId: job.awardedApplicationId,
     closedAt: job.closedAt ?? null,
@@ -59,7 +59,7 @@ function serializeApplication(app) {
     status: app.status,
     createdAt: app.createdAt,
     talent: app.talent
-      ? { id: app.talent.id, fullName: app.talent.fullName, email: app.talent.email }
+      ? { id: app.talent.id, fullName: app.talent.fullName, email: app.talent.email, photoUrl: avatarPublicUrl(app.talent.photoPath) }
       : undefined,
   };
 }

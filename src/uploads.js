@@ -22,17 +22,17 @@ const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0
 const HEIC_BRANDS = ["heic", "heix", "hevc", "hevx"];
 const HEIF_BRANDS = ["mif1", "msf1"];
 
-/** The type of [buffer] from its leading bytes, or null when it is not one we accept. */
-function sniffType(buffer) {
+/** The key (a TYPES key) of [buffer] from its leading bytes, or null when it is not one we accept. */
+function sniffKey(buffer) {
   const at = (from, to) => buffer.toString("latin1", from, to);
-  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(PNG_SIGNATURE)) return TYPES.png;
-  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return TYPES.jpeg;
-  if (buffer.length >= 6 && (at(0, 6) === "GIF87a" || at(0, 6) === "GIF89a")) return TYPES.gif;
-  if (buffer.length >= 12 && at(0, 4) === "RIFF" && at(8, 12) === "WEBP") return TYPES.webp;
-  if (buffer.length >= 5 && at(0, 5) === "%PDF-") return TYPES.pdf;
+  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(PNG_SIGNATURE)) return "png";
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "jpeg";
+  if (buffer.length >= 6 && (at(0, 6) === "GIF87a" || at(0, 6) === "GIF89a")) return "gif";
+  if (buffer.length >= 12 && at(0, 4) === "RIFF" && at(8, 12) === "WEBP") return "webp";
+  if (buffer.length >= 5 && at(0, 5) === "%PDF-") return "pdf";
   if (buffer.length >= 12 && at(4, 8) === "ftyp") {
-    if (HEIC_BRANDS.includes(at(8, 12))) return TYPES.heic;
-    if (HEIF_BRANDS.includes(at(8, 12))) return TYPES.heif;
+    if (HEIC_BRANDS.includes(at(8, 12))) return "heic";
+    if (HEIF_BRANDS.includes(at(8, 12))) return "heif";
   }
   return null;
 }
@@ -54,17 +54,19 @@ function cleanBaseName(originalName, extension) {
  * Checks an uploaded file. On success: the real content type, the extension for it, and the name
  * to store it under. On refusal: an HTTP status, a stable code and a message for the person.
  */
-function inspectUpload({ buffer, originalName }) {
+function inspectUpload({ buffer, originalName, allow, unsupportedMessage }) {
   if (!buffer || buffer.length === 0) {
     return { ok: false, status: 400, code: "empty_file", error: "That file is empty. Choose a different one." };
   }
-  const type = sniffType(buffer);
+  // [allow] narrows the accepted types for one route (a profile photo is only JPG, PNG or WebP).
+  const key = sniffKey(buffer);
+  const type = key && (!allow || allow.includes(key)) ? TYPES[key] : null;
   if (!type) {
     return {
       ok: false,
       status: 415,
       code: "unsupported_file",
-      error: "That file type isn't supported. Upload an image (JPG, PNG, WebP, GIF, HEIC) or a PDF.",
+      error: unsupportedMessage ?? "That file type isn't supported. Upload an image (JPG, PNG, WebP, GIF, HEIC) or a PDF.",
     };
   }
   return {
@@ -79,13 +81,14 @@ function inspectUpload({ buffer, originalName }) {
  * Express middleware for ONE optional file field: reads it into memory with a size cap and turns
  * multer's errors into clean answers instead of a 500.
  */
-function singleFile(field) {
-  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 } }).single(field);
+function singleFile(field, { maxBytes = MAX_UPLOAD_BYTES } = {}) {
+  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: maxBytes, files: 1 } }).single(field);
+  const limitMb = Math.round(maxBytes / (1024 * 1024));
   return (req, res, next) =>
     upload(req, res, (err) => {
       if (!err) return next();
       if (err.code === "LIMIT_FILE_SIZE") {
-        return res.status(413).json({ error: "That file is too large. The limit is 10 MB.", code: "file_too_large" });
+        return res.status(413).json({ error: `That file is too large. The limit is ${limitMb} MB.`, code: "file_too_large" });
       }
       if (err.code === "LIMIT_FILE_COUNT" || err.code === "LIMIT_UNEXPECTED_FILE") {
         return res.status(400).json({ error: "Send one file at a time.", code: "too_many_files" });
@@ -99,12 +102,22 @@ function singleFile(field) {
  * ({ buffer, contentType, fileName }). No file is fine (the field is optional). Anything that
  * fails the check is refused here, before storage is touched.
  */
-function checkUpload(req, res, next) {
-  if (!req.file) return next();
-  const checked = inspectUpload({ buffer: req.file.buffer, originalName: req.file.originalname });
-  if (!checked.ok) return res.status(checked.status).json({ error: checked.error, code: checked.code });
-  req.upload = { buffer: req.file.buffer, contentType: checked.contentType, fileName: checked.fileName };
-  return next();
+function checkUploadOf(options = {}) {
+  return (req, res, next) => {
+    if (!req.file) return next();
+    const checked = inspectUpload({ buffer: req.file.buffer, originalName: req.file.originalname, ...options });
+    if (!checked.ok) return res.status(checked.status).json({ error: checked.error, code: checked.code });
+    req.upload = { buffer: req.file.buffer, contentType: checked.contentType, extension: checked.extension, fileName: checked.fileName };
+    return next();
+  };
 }
+const checkUpload = checkUploadOf();
 
-module.exports = { MAX_UPLOAD_BYTES, inspectUpload, singleFile, checkUpload };
+/** Profile photos: pictures a phone can always draw. No GIF (not animated avatars), no HEIC, no PDF. */
+const PHOTO_MAX_BYTES = 5 * 1024 * 1024;
+const checkPhoto = checkUploadOf({
+  allow: ["png", "jpeg", "webp"],
+  unsupportedMessage: "That file type isn't supported. Choose a JPG, PNG or WebP picture.",
+});
+
+module.exports = { MAX_UPLOAD_BYTES, PHOTO_MAX_BYTES, inspectUpload, singleFile, checkUpload, checkPhoto };

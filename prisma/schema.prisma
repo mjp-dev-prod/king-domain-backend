@@ -282,6 +282,9 @@ model User {
   passwordHash String
   role         WaitlistRole
   fullName     String
+  /// Path of the profile photo in the PUBLIC `avatars` bucket (`<userId>/<timestamp>.<ext>`), or
+  /// null. The public link is derived from it, so the database never holds a link that could go stale.
+  photoPath    String?
   /// Sprint 4: signup creates the account immediately (unverified) so the
   /// user is already logged in while they verify — matching
   /// VerifyEmailScreen's real UX (enter the code, land straight in the

@@ -1,10 +1,10 @@
 const express = require("express");
-const { singleFile, checkUpload } = require("../uploads");
+const { singleFile, checkUpload, checkPhoto, PHOTO_MAX_BYTES } = require("../uploads");
 const crypto = require("node:crypto");
 const { prisma } = require("../db");
 const { rateLimit } = require("../admin/rateLimit");
 const mailer = require("../admin/mailer");
-const { uploadProofFile, getProofFileSignedUrl } = require("../storage");
+const { uploadProofFile, getProofFileSignedUrl, uploadAvatar, removeAvatar, avatarPublicUrl } = require("../storage");
 const paystack = require("../paystack");
 const auth = require("./auth");
 const jwtUtil = require("./jwt");
@@ -83,6 +83,8 @@ function publicUser(user) {
     email: user.email,
     role: user.role,
     fullName: user.fullName,
+    // The permanent public link (profile photos are visible to everyone), or null.
+    photoUrl: avatarPublicUrl(user.photoPath),
     emailVerified: user.emailVerified,
     createdAt: user.createdAt,
   };
@@ -459,6 +461,63 @@ router.patch("/me/profile", requireUser, requireTalentProfile, async (req, res) 
     include: { proofItems: { orderBy: { createdAt: "desc" } } },
   });
   return res.json({ profile: await serializeTalentProfile(updated) });
+});
+
+// ── Profile photo: public, JPG/PNG/WebP, 5 MB, one per person ──────────
+
+/**
+ * Points the user at [newPath] (or at nothing) and returns the path it replaced. The update is
+ * conditional on the path we read, so two simultaneous changes can't both claim the same
+ * "previous" file: the loser re-reads and swaps again, and every replaced file gets deleted once.
+ */
+async function swapPhotoPath(userId, newPath) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const { photoPath: current } = await prisma.user.findUnique({ where: { id: userId }, select: { photoPath: true } });
+    const { count } = await prisma.user.updateMany({ where: { id: userId, photoPath: current }, data: { photoPath: newPath } });
+    if (count === 1) return current;
+  }
+  throw new Error("could not update the photo: too many simultaneous changes");
+}
+
+/** A leftover object costs storage, not correctness: log it and carry on. */
+async function dropPhotoObject(path) {
+  if (!path) return;
+  try {
+    await removeAvatar(path);
+  } catch (err) {
+    console.error(`photo: could not delete the old file ${path}:`, err.message);
+  }
+}
+
+router.put("/me/photo", requireUser, singleFile("file", { maxBytes: PHOTO_MAX_BYTES }), checkPhoto, async (req, res) => {
+  if (!req.upload) return res.status(400).json({ error: "Choose a picture to upload.", code: "file_required" });
+
+  let path;
+  try {
+    path = await uploadAvatar({ userId: req.user.id, buffer: req.upload.buffer, contentType: req.upload.contentType, extension: req.upload.extension });
+  } catch (err) {
+    console.error("photo: upload failed:", err.message);
+    return res.status(502).json({ error: "Couldn't save the photo. Please try again.", code: "storage_failed" });
+  }
+
+  let previous;
+  try {
+    previous = await swapPhotoPath(req.user.id, path);
+  } catch (err) {
+    await dropPhotoObject(path); // nothing points at the new file: don't leave it behind
+    throw err;
+  }
+  await dropPhotoObject(previous);
+
+  const updated = await prisma.user.findUnique({ where: { id: req.user.id } });
+  return res.json({ user: publicUser(updated) });
+});
+
+router.delete("/me/photo", requireUser, async (req, res) => {
+  const previous = await swapPhotoPath(req.user.id, null);
+  await dropPhotoObject(previous);
+  const updated = await prisma.user.findUnique({ where: { id: req.user.id } });
+  return res.json({ user: publicUser(updated) });
 });
 
 // ── Proof items — submission (review lives under /admin, see
