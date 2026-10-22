@@ -150,3 +150,42 @@ describe("POST /jobs/:id/apply", () => {
     assert.equal((await api(ta, "POST", `/jobs/${other.id}/apply`)).status, 403);
   });
 });
+
+describe("POST /jobs/:id/applications/:applicationId/award", () => {
+  it("awards one applicant: selected, the rest not selected, a contract awaiting payment with the frozen fee and pay window", async () => {
+    const job = await post({ budget: 2000 });
+    const a = (await api(ta, "POST", `/jobs/${job.id}/apply`)).json.application;
+    const b = (await api(tb, "POST", `/jobs/${job.id}/apply`)).json.application;
+    const before = Date.now();
+    const r = await api(ct, "POST", `/jobs/${job.id}/applications/${a.id}/award`);
+    assert.equal(r.status, 201, JSON.stringify(r.json));
+    assert.equal(r.json.contract.status, "awaitingPayment");
+    assert.equal(Number(r.json.contract.platformFeeAmount), 200);
+    const payByMs = new Date(r.json.contract.payByAt).getTime() - before;
+    assert.ok(Math.abs(payByMs - 24 * 3_600_000) < 60_000, `payBy window ${payByMs}`);
+    const rows = await prisma.application.findMany({ where: { jobId: job.id } });
+    assert.equal(rows.find((x) => x.id === a.id).status, "selected");
+    assert.equal(rows.find((x) => x.id === b.id).status, "notSelected");
+    assert.equal((await prisma.job.findUnique({ where: { id: job.id } })).awardedApplicationId, a.id);
+    assert.equal(await prisma.contractEvent.count({ where: { jobId: job.id, type: "awarded" } }), 1);
+  });
+
+  it("only the job's client; a second award and a missing application are refused", async () => {
+    const job = await post();
+    const a = (await api(ta, "POST", `/jobs/${job.id}/apply`)).json.application;
+    assert.equal((await api(c2, "POST", `/jobs/${job.id}/applications/${a.id}/award`)).status, 403);
+    assert.equal((await api(ct, "POST", `/jobs/${job.id}/applications/00000000-0000-0000-0000-000000000000/award`)).status, 404);
+    assert.equal((await api(ct, "POST", `/jobs/${job.id}/applications/${a.id}/award`)).status, 201);
+    assert.equal((await api(ct, "POST", `/jobs/${job.id}/applications/${a.id}/award`)).status, 400);
+  });
+
+  it("a closed job cannot be awarded (409 closed) and no contract is created", async () => {
+    const job = await post();
+    const a = (await api(ta, "POST", `/jobs/${job.id}/apply`)).json.application;
+    await api(ct, "POST", `/jobs/${job.id}/close`);
+    const r = await api(ct, "POST", `/jobs/${job.id}/applications/${a.id}/award`);
+    assert.equal(r.status, 409);
+    assert.equal(r.json.code, "closed");
+    assert.equal(await prisma.contract.count({ where: { jobId: job.id } }), 0);
+  });
+});

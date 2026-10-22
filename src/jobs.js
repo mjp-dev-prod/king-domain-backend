@@ -7,6 +7,8 @@
 // so "no edit after the first applicant", "no application after a close" and
 // "no award after a close" hold without raw SQL or serializable transactions.
 const { RULES, baseDeps, refuse } = require("./contractCore");
+const paystack = require("./paystack");
+const lifecycle = require("./contractLifecycle");
 
 const jobInclude = { client: true, contract: true, _count: { select: { applications: true } } };
 const loadJob = (prisma, id) => prisma.job.findUnique({ where: { id }, include: jobInclude });
@@ -130,4 +132,48 @@ async function applyToJob({ jobId, talentId, revision }, deps) {
   return refuse(409, "terms_changed", "This job was just edited. Read the new details, then apply again.");
 }
 
-module.exports = { validateJobInput, jobInclude, loadJob, stateRefusal, editJob, closeJob, applyToJob, MSG };
+/**
+ * The single-award action (docs/core/correction-talent-discovery-screen.md in
+ * the mobile repo): one applicant selected, every other one not selected, the
+ * contract created awaiting payment with the fee frozen at today's budget, all
+ * or nothing. The job row is claimed first (still open and unawarded) so an
+ * award can never race a close or a second award.
+ */
+async function awardJob({ jobId, clientId, applicationId }, deps) {
+  const { prisma } = baseDeps(deps);
+  const job = await prisma.job.findUnique({ where: { id: jobId } });
+  if (!job) return refuse(404, "not_found", "Job not found.");
+  if (job.clientId !== clientId) return refuse(403, "not_yours", "Not your job.");
+  if (job.closedAt) return refuse(409, "closed", MSG.closed);
+  if (job.awardedApplicationId) return refuse(400, "awarded", MSG.awarded);
+
+  const winning = await prisma.application.findUnique({ where: { id: applicationId } });
+  if (!winning || winning.jobId !== job.id) return refuse(404, "not_found", "Application not found on this job.");
+
+  const platformFeeAmount = paystack.calculatePlatformFee(job.budget);
+  const contract = await prisma.$transaction(async (trx) => {
+    const { count } = await trx.job.updateMany({
+      where: { id: job.id, awardedApplicationId: null, closedAt: null },
+      data: { awardedApplicationId: winning.id },
+    });
+    if (count === 0) return null;
+    await trx.application.update({ where: { id: winning.id }, data: { status: "selected" } });
+    await trx.application.updateMany({ where: { jobId: job.id, id: { not: winning.id } }, data: { status: "notSelected" } });
+    return trx.contract.create({
+      data: { jobId: job.id, status: "awaitingPayment", platformFeeAmount, payByAt: new Date(Date.now() + lifecycle.WINDOWS.paymentMs) },
+    });
+  });
+  if (!contract) {
+    const fresh = await prisma.job.findUnique({ where: { id: job.id } });
+    return fresh?.closedAt ? refuse(409, "closed", MSG.closed) : refuse(400, "awarded", MSG.awarded);
+  }
+  await lifecycle.recordEvent(prisma, {
+    jobId: job.id,
+    contractId: contract.id,
+    type: "awarded",
+    meta: { applicationId: winning.id, payByAt: contract.payByAt },
+  });
+  return { ok: true, contract };
+}
+
+module.exports = { validateJobInput, jobInclude, loadJob, stateRefusal, editJob, closeJob, applyToJob, awardJob, MSG };

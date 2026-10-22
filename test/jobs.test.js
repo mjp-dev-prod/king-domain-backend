@@ -188,3 +188,15 @@ describe("applyToJob", () => {
     assert.equal((await jobs.applyToJob({ jobId: "00000000-0000-0000-0000-000000000000", talentId: ctx.talentA.id })).status, 404);
   });
 });
+
+describe("awardJob", () => {
+  it("refuses a closed job, creates no contract, and leaves the application as it was", async () => {
+    const job = await openJob();
+    const app = await prisma.application.create({ data: { jobId: job.id, talentId: ctx.talentA.id } });
+    await jobs.closeJob({ jobId: job.id, clientId: ctx.client.id });
+    const r = await jobs.awardJob({ jobId: job.id, clientId: ctx.client.id, applicationId: app.id });
+    assert.equal(r.code, "closed");
+    assert.equal(await prisma.contract.count({ where: { jobId: job.id } }), 0);
+    assert.equal((await prisma.job.findUnique({ where: { id: job.id } })).awardedApplicationId, null);
+  });
+});

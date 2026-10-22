@@ -281,46 +281,9 @@ router.get("/:id/applications", requireClient, async (req, res) => {
  * the budget that was true at award time.
  */
 router.post("/:id/applications/:applicationId/award", requireClient, async (req, res) => {
-  const job = await prisma.job.findUnique({ where: { id: req.params.id } });
-  if (!job) return res.status(404).json({ error: "Job not found." });
-  if (job.clientId !== req.user.id) {
-    return res.status(403).json({ error: "Not your job." });
-  }
-  if (job.awardedApplicationId) {
-    return res.status(400).json({ error: "This job has already been awarded." });
-  }
-
-  const winning = await prisma.application.findUnique({ where: { id: req.params.applicationId } });
-  if (!winning || winning.jobId !== job.id) {
-    return res.status(404).json({ error: "Application not found on this job." });
-  }
-
-  const platformFeeAmount = paystack.calculatePlatformFee(job.budget);
-
-  const [, , , contract] = await prisma.$transaction([
-    prisma.application.update({ where: { id: winning.id }, data: { status: "selected" } }),
-    prisma.application.updateMany({
-      where: { jobId: job.id, id: { not: winning.id } },
-      data: { status: "notSelected" },
-    }),
-    prisma.job.update({ where: { id: job.id }, data: { awardedApplicationId: winning.id } }),
-    prisma.contract.create({
-      data: {
-        jobId: job.id,
-        status: "awaitingPayment",
-        platformFeeAmount,
-        payByAt: new Date(Date.now() + lifecycle.WINDOWS.paymentMs),
-      },
-    }),
-  ]);
-  await lifecycle.recordEvent(prisma, {
-    jobId: job.id,
-    contractId: contract.id,
-    type: "awarded",
-    meta: { applicationId: winning.id, payByAt: contract.payByAt },
-  });
-
-  return res.status(201).json({ contract: await serializeContract(contract) });
+  const result = await jobsService.awardJob({ jobId: req.params.id, clientId: req.user.id, applicationId: req.params.applicationId });
+  if (!result.ok) return res.status(result.status).json({ error: result.error, code: result.code });
+  return res.status(201).json({ contract: await serializeContract(result.contract) });
 });
 
 /**
