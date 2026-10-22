@@ -93,4 +93,41 @@ async function closeJob({ jobId, clientId }, deps) {
   return (await stateRefusal(prisma, job.id, { editing: false })) ?? refuse(409, "closed", MSG.closed);
 }
 
-module.exports = { validateJobInput, jobInclude, loadJob, stateRefusal, editJob, closeJob, MSG };
+/**
+ * A verified talent applies. The job row is claimed first (guarded on open,
+ * unawarded and, when the app sent it, the revision the talent read) and the
+ * application is written in the same transaction, so an application can never
+ * land on a job that closed, was awarded, or was edited since the talent
+ * looked at it. Setting lastAppliedAt is also what locks the terms (editJob).
+ * The caller has already checked verified-in-category and the payout account.
+ */
+async function applyToJob({ jobId, talentId, revision }, deps) {
+  const { prisma, now } = baseDeps(deps);
+  const job = await prisma.job.findUnique({ where: { id: jobId } });
+  if (!job) return refuse(404, "not_found", "Job not found.");
+  if (job.closedAt) return refuse(409, "closed", MSG.closed);
+  if (job.awardedApplicationId) return refuse(400, "awarded", MSG.awarded);
+
+  try {
+    const application = await prisma.$transaction(async (trx) => {
+      const { count } = await trx.job.updateMany({
+        where: { id: job.id, closedAt: null, awardedApplicationId: null, ...(revision === undefined ? {} : { revision }) },
+        data: { lastAppliedAt: now() },
+      });
+      if (count === 0) return null;
+      return trx.application.create({ data: { jobId: job.id, talentId }, include: { talent: true } });
+    });
+    if (application) return { ok: true, application };
+  } catch (err) {
+    // The @@unique([jobId, talentId]) in schema.prisma: a double apply is a clean 409.
+    if (err.code === "P2002") return refuse(409, "already_applied", "You've already applied to this job.");
+    throw err;
+  }
+
+  const fresh = await prisma.job.findUnique({ where: { id: job.id } });
+  if (fresh?.closedAt) return refuse(409, "closed", MSG.closed);
+  if (fresh?.awardedApplicationId) return refuse(400, "awarded", MSG.awarded);
+  return refuse(409, "terms_changed", "This job was just edited. Read the new details, then apply again.");
+}
+
+module.exports = { validateJobInput, jobInclude, loadJob, stateRefusal, editJob, closeJob, applyToJob, MSG };

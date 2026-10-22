@@ -240,24 +240,16 @@ router.post("/:id/apply", requireTalentProfile, async (req, res) => {
     return res.status(403).json({ error: "Add a payout account before applying, so you can be paid." });
   }
 
-  if (job.awardedApplicationId) {
-    return res.status(400).json({ error: "This job has already been awarded." });
+  // The revision of the job the talent read: if the client edited it since, the
+  // application is refused (terms_changed) so nobody applies to terms they never saw.
+  const { revision } = req.body ?? {};
+  if (revision !== undefined && !Number.isInteger(revision)) {
+    return res.status(400).json({ error: "revision must be a whole number." });
   }
 
-  try {
-    const application = await prisma.application.create({
-      data: { jobId: job.id, talentId: req.user.id },
-      include: { talent: true },
-    });
-    return res.status(201).json({ application: serializeApplication(application) });
-  } catch (err) {
-    // Prisma's unique constraint violation — the @@unique([jobId, talentId]) in
-    // schema.prisma, so a double-apply reads as a clean 409, not a 500.
-    if (err.code === "P2002") {
-      return res.status(409).json({ error: "You've already applied to this job." });
-    }
-    throw err;
-  }
+  const result = await jobsService.applyToJob({ jobId: job.id, talentId: req.user.id, revision });
+  if (!result.ok) return res.status(result.status).json({ error: result.error, code: result.code });
+  return res.status(201).json({ application: serializeApplication(result.application) });
 });
 
 router.get("/:id/applications", requireClient, async (req, res) => {

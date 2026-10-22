@@ -138,3 +138,53 @@ describe("closeJob", () => {
     assert.equal((await prisma.job.findUnique({ where: { id: awarded.job.id } })).closedAt, null);
   });
 });
+
+describe("applyToJob", () => {
+  const apply = (job, talent = ctx.talentA, revision, deps) => jobs.applyToJob({ jobId: job.id, talentId: talent.id, revision }, deps);
+
+  it("creates the application and stamps lastAppliedAt", async () => {
+    const job = await openJob();
+    const r = await apply(job, ctx.talentA, 0);
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.application.status, "pending");
+    assert.ok((await prisma.job.findUnique({ where: { id: job.id } })).lastAppliedAt);
+  });
+
+  it("accepts an application without a revision (older app builds)", async () => {
+    assert.equal((await apply(await openJob())).ok, true);
+  });
+
+  it("refuses an application made on older terms (terms_changed) and creates nothing", async () => {
+    const job = await openJob();
+    await edit(job); // revision is now 1
+    const r = await apply(job, ctx.talentA, 0);
+    assert.equal(r.status, 409);
+    assert.equal(r.code, "terms_changed");
+    assert.equal(await prisma.application.count({ where: { jobId: job.id } }), 0);
+    assert.equal((await apply(job, ctx.talentA, 1)).ok, true);
+  });
+
+  it("refuses a closed job (409 closed) and an awarded job (400 awarded)", async () => {
+    const closed = await openJob({ closedAt: new Date() });
+    const c = await apply(closed);
+    assert.equal(c.status, 409);
+    assert.equal(c.code, "closed");
+    const awarded = await h.seedAward(ctx);
+    const a = await apply(awarded.job, ctx.talentA);
+    assert.equal(a.status, 400);
+    assert.equal(a.code, "awarded");
+  });
+
+  it("a second application by the same talent is already_applied and leaves one row", async () => {
+    const job = await openJob();
+    assert.equal((await apply(job)).ok, true);
+    const r = await apply(job);
+    assert.equal(r.status, 409);
+    assert.equal(r.code, "already_applied");
+    assert.equal(await prisma.application.count({ where: { jobId: job.id } }), 1);
+  });
+
+  it("a missing job is 404", async () => {
+    assert.equal((await jobs.applyToJob({ jobId: "00000000-0000-0000-0000-000000000000", talentId: ctx.talentA.id })).status, 404);
+  });
+});

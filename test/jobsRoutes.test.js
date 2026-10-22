@@ -114,3 +114,39 @@ describe("POST /jobs/:id/close and feed visibility", () => {
     assert.equal((await api(ct, "POST", `/jobs/${awarded.job.id}/close`)).json.code, "awarded");
   });
 });
+
+describe("POST /jobs/:id/apply", () => {
+  it("applies (201), with or without the revision the talent read", async () => {
+    const withRev = await post();
+    const a = await api(ta, "POST", `/jobs/${withRev.id}/apply`, { revision: 0 });
+    assert.equal(a.status, 201, JSON.stringify(a.json));
+    const without = await post();
+    assert.equal((await api(tb, "POST", `/jobs/${without.id}/apply`)).status, 201);
+  });
+
+  it("a stale revision is 409 terms_changed; a non-integer revision is 400", async () => {
+    const job = await post();
+    await api(ct, "PATCH", `/jobs/${job.id}`, body({ description: "changed" }));
+    const stale = await api(ta, "POST", `/jobs/${job.id}/apply`, { revision: 0 });
+    assert.equal(stale.status, 409);
+    assert.equal(stale.json.code, "terms_changed");
+    assert.equal((await api(ta, "POST", `/jobs/${job.id}/apply`, { revision: "x" })).status, 400);
+    assert.equal((await api(ta, "POST", `/jobs/${job.id}/apply`, { revision: 1 })).status, 201);
+  });
+
+  it("a closed job is 409 closed", async () => {
+    const job = await post();
+    await api(ct, "POST", `/jobs/${job.id}/close`);
+    const r = await api(ta, "POST", `/jobs/${job.id}/apply`, { revision: 0 });
+    assert.equal(r.status, 409);
+    assert.equal(r.json.code, "closed");
+  });
+
+  it("applying twice is 409 already_applied; an unverified category is still 403", async () => {
+    const job = await post();
+    assert.equal((await api(ta, "POST", `/jobs/${job.id}/apply`)).status, 201);
+    assert.equal((await api(ta, "POST", `/jobs/${job.id}/apply`)).json.code, "already_applied");
+    const other = await post({ category: "A category nobody is verified in" });
+    assert.equal((await api(ta, "POST", `/jobs/${other.id}/apply`)).status, 403);
+  });
+});
