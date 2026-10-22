@@ -1,5 +1,5 @@
 const express = require("express");
-const multer = require("multer");
+const { singleFile, checkUpload } = require("../uploads");
 const crypto = require("node:crypto");
 const { prisma } = require("../db");
 const { requireUser, requireTalentProfile } = require("./routes");
@@ -15,9 +15,7 @@ const jobsService = require("../jobs");
 const router = express.Router();
 router.use(requireUser);
 
-// Matches proof-items' own limit — a deliverable is the same kind of
-// personal work file (image/doc/video-thumbnail-sized), not bulk media.
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+// Uploads: one optional file, 10 MB, checked by its own bytes (src/uploads.js).
 
 // Lifecycle: apply -> award (contract created awaitingPayment) -> fund
 // (client pays on Paystack checkout; webhook or verify-payment flips it to
@@ -466,16 +464,18 @@ router.post(
   loadContractForJob,
   requireAwardedTalent,
   requireContractStatus(["inProgress", "changesRequested"]),
-  upload.single("file"),
+  singleFile("file"),
+  checkUpload,
   async (req, res) => {
     const { deliverableNote, deliverableUrl } = req.body ?? {};
     let filePath = null;
-    if (req.file) {
+    if (req.upload) {
+      // The type and name are the checked ones, never the client's.
       filePath = await uploadDeliverableFile({
         contractId: req.contract.id,
-        buffer: req.file.buffer,
-        originalName: req.file.originalname,
-        contentType: req.file.mimetype,
+        buffer: req.upload.buffer,
+        originalName: req.upload.fileName,
+        contentType: req.upload.contentType,
       });
     }
 

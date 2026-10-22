@@ -1,5 +1,5 @@
 const express = require("express");
-const multer = require("multer");
+const { singleFile, checkUpload } = require("../uploads");
 const crypto = require("node:crypto");
 const { prisma } = require("../db");
 const { rateLimit } = require("../admin/rateLimit");
@@ -11,10 +11,7 @@ const jwtUtil = require("./jwt");
 
 const router = express.Router();
 
-// Matches the proof-items Supabase Storage bucket's own limit — a work
-// sample is a screenshot/short file, not a video master, so this is
-// deliberately much tighter than the 50MB app-releases bucket.
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+// Uploads: one optional file, 10 MB, checked by its own bytes (src/uploads.js).
 
 const MIN_PASSWORD_LENGTH = 8;
 const VALID_ROLES = ["talent", "client"];
@@ -472,7 +469,8 @@ router.post(
   "/me/proof-items",
   requireUser,
   requireTalentProfile,
-  upload.single("file"),
+  singleFile("file"),
+  checkUpload,
   async (req, res) => {
     const { category, title } = req.body ?? {};
 
@@ -484,12 +482,13 @@ router.post(
     }
 
     let filePath = null;
-    if (req.file) {
+    if (req.upload) {
+      // The type and name are the checked ones, never the client's.
       filePath = await uploadProofFile({
         talentProfileId: req.talentProfile.id,
-        buffer: req.file.buffer,
-        originalName: req.file.originalname,
-        contentType: req.file.mimetype,
+        buffer: req.upload.buffer,
+        originalName: req.upload.fileName,
+        contentType: req.upload.contentType,
       });
     }
 
