@@ -7,6 +7,7 @@ const mailer = require("../admin/mailer");
 const { uploadProofFile, getProofFileSignedUrl, uploadAvatar, removeAvatar, avatarPublicUrl } = require("../storage");
 const paystack = require("../paystack");
 const accounts = require("../accounts");
+const push = require("../push");
 const auth = require("./auth");
 const jwtUtil = require("./jwt");
 
@@ -445,6 +446,21 @@ router.delete(
     return res.json({ ok: true });
   },
 );
+
+/**
+ * The phone's push token (src/push.js). The app registers it at every start and when Firebase rotates it,
+ * and removes it on logout so the next person on a shared phone never receives this person's pushes.
+ */
+router.put("/me/device", requireUser, async (req, res) => {
+  const result = await push.registerToken({ userId: req.user.id, token: req.body?.token });
+  if (!result.ok) return res.status(result.status).json({ error: result.error, code: result.code });
+  return res.json({ ok: true });
+});
+
+router.delete("/me/device", requireUser, async (req, res) => {
+  await push.unregisterToken({ userId: req.user.id, token: req.body?.token });
+  return res.json({ ok: true });
+});
 
 router.get("/me", requireUser, async (req, res) => {
   return res.json({ user: publicUser(req.user) });

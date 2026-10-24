@@ -16,6 +16,7 @@ const { buildCiUploadRouter } = require("./app/ciUploadRoutes");
 const storage = require("./storage");
 const { startNotificationScheduler } = require("./admin/notifications");
 const { startContractScheduler } = require("./contractLifecycle");
+const { startPushDispatcher } = require("./pushDispatcher");
 const mcpAdmin = require("./mcp-admin/mcp-admin.routes");
 const paystackWebhook = require("./webhooks/paystackWebhook");
 
@@ -140,4 +141,5 @@ app.listen(port, () => {
   console.log(`King Domain backend listening on port ${port}`);
   startNotificationScheduler({ intervalMs: notificationIntervalMs });
   startContractScheduler({ intervalMs: contractIntervalMs });
+  startPushDispatcher();
 });

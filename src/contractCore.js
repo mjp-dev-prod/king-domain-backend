@@ -36,6 +36,8 @@ function baseDeps(deps = {}) {
   return {
     prisma: deps.prisma ?? realPrisma,
     mailer: deps.mailer ?? realMailer,
+    // Best-effort pushes (src/push.js); a no-op with no Firebase key. Lazy: push.js is not needed until used.
+    push: deps.push ?? require("./push"),
     now: deps.now ?? (() => new Date()),
   };
 }

@@ -307,6 +307,7 @@ async function startServer({ port, paystackUrl, autoRelease = true, storageUrl }
       AUTO_RELEASE_ENABLED: autoRelease ? "true" : "false",
       CONTRACT_SCHEDULER: "off",
       BREVO_API_KEY: "", // set-but-empty so dotenv cannot fill it from .env: no real email
+      FCM_SERVICE_ACCOUNT_JSON: "", // same: a test server never pushes to a real phone
       // Same for storage: a test must never write a file into the real Supabase buckets in .env.
       // Off unless the test hands it a fake (serveFakeStorage).
       SUPABASE_URL: storageUrl ?? "",

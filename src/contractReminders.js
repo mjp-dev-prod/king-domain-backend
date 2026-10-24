@@ -6,6 +6,7 @@
 // row so the next tick retries it. Keys include the deadline itself, so a
 // deadline that moves (an extension) gets fresh reminders.
 const { HOUR, RULES, autoReleaseEnabled, baseDeps, parties } = require("./contractCore");
+const { reminderMessage } = require("./pushMessages");
 
 /**
  * `before`: how long before the deadline each reminder goes, largest first.
@@ -90,7 +91,7 @@ const KIND = { extension: "extension", review: "review", change: "change", deliv
 const PASSED_KIND = { delivery: "deliveryPassed", deliveryMissed: "deliveryMissedPassed" };
 
 async function sweepReminders(deps = {}) {
-  const { prisma, mailer, now } = baseDeps(deps);
+  const { prisma, mailer, push, now } = baseDeps(deps);
   const autoRelease = deps.autoRelease ?? autoReleaseEnabled();
   const at = now();
   let reminded = 0;
@@ -108,6 +109,8 @@ async function sweepReminders(deps = {}) {
     );
     if (outcome === "sent") {
       reminded++;
+      // After the reminder is recorded, so a retry of a failed email never repeats the push. Best-effort.
+      await push.notifyUser(person.id, reminderMessage({ kind, jobTitle: cand.contract.job.title, jobId: cand.contract.jobId })).catch(() => {});
       console.log(`reminders: sent key=${key} contract=${cand.contract.id} to=${entry.to} due=${cand.due.toISOString()} now=${at.toISOString()}`);
     }
   }

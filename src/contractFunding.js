@@ -3,7 +3,7 @@
 // idempotency and amount checks can't drift apart between the two paths.
 const { prisma } = require("./db");
 const { fromKobo } = require("./paystack");
-const { DAY } = require("./contractCore");
+const { DAY, recordEvent } = require("./contractCore");
 
 // References are minted as kd_<contractId>_<8 hex> in jobsRoutes.js's
 // /contract/fund. Each retry of "Pay" mints a new reference and overwrites
@@ -86,6 +86,9 @@ async function confirmFunding({ reference, amountKobo, source }) {
     data: { status: "funded", fundedAt, deliverByAt, paystackReference: reference, paymentFailed: false },
   });
   const readBack = await prisma.contract.findUnique({ where: { id: contract.id } });
+  // Recorded only by the call that actually made the change, so it is written once per contract. This is
+  // also what tells the talent (push) that they can start.
+  if (count === 1) await recordEvent(prisma, { jobId: contract.jobId, contractId: contract.id, type: "funded", meta: { reference, source } });
   console.log(`contractFunding[${source}]: updated=${count} readBackStatus=${readBack.status} contract=${contract.id} deliverByAt=${readBack.deliverByAt?.toISOString() ?? "none"}`);
 
   return { outcome: count === 1 ? "funded" : "alreadyFunded", contract: readBack };

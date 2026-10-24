@@ -76,6 +76,7 @@ async function deleteAccount({ userId }, deps = {}) {
         const noContract = { contract: { is: null } };
         const counts = {};
         counts.sessions = (await trx.userSession.deleteMany({ where: { userId } })).count;
+        counts.devices = (await trx.deviceToken.deleteMany({ where: { userId } })).count;
         counts.profile = (await trx.talentProfile.deleteMany({ where: { userId } })).count; // proof items cascade
         counts.applications = (await trx.application.deleteMany({ where: { talentId: userId, status: { not: "selected" } } })).count;
         // Jobs with no contract and no money trail go, with their applications. A job that was awarded and
@@ -146,7 +147,7 @@ async function deleteAccount({ userId }, deps = {}) {
   const c = removed.counts;
   log(
     userId,
-    `removed sessions=${c.sessions} profile=${c.profile} applications=${c.applications} jobsDeleted=${c.jobsDeleted} jobsClosed=${c.jobsClosed} waitlist=${c.waitlist}; ` +
+    `removed sessions=${c.sessions} devices=${c.devices} profile=${c.profile} applications=${c.applications} jobsDeleted=${c.jobsDeleted} jobsClosed=${c.jobsClosed} waitlist=${c.waitlist}; ` +
       `read-back deletedAt=${after?.deletedAt?.toISOString() ?? "NULL"} email=${after?.email} sessionsLeft=${after?._count.sessions} profileLeft=${after?.talentProfile ? "YES" : "no"}`,
   );
   log(userId, leftovers.size ? `cleanup incomplete: ${[...leftovers].join(", ")}` : "cleanup complete");

@@ -309,11 +309,30 @@ model User {
   updatedAt    DateTime     @updatedAt
 
   sessions       UserSession[]
+  deviceTokens   DeviceToken[]
   talentProfile  TalentProfile?
   jobsPosted     Job[]           @relation("JobsPostedByClient")
   applications   Application[]
 
   @@map("users")
+}
+
+/// A phone that can receive push notifications (src/push.js). `token` is the FCM registration token; it is
+/// unique because one app install belongs to one person at a time: signing in as someone else on the same
+/// phone moves the row. `lastSeenAt` moves on every registration, so a token nobody has refreshed for
+/// 60 days can be pruned. Removed on logout, when FCM says it is dead, and on account deletion.
+model DeviceToken {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token      String   @unique
+  platform   String   @default("android")
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([lastSeenAt])
+  @@map("device_tokens")
 }
 
 /// Refresh-token store for User, structurally identical to AdminSession —
@@ -567,9 +586,14 @@ model ContractEvent {
   type       String
   meta       Json?
   createdAt  DateTime @default(now())
+  /// Set by the push dispatcher (src/pushDispatcher.js) when it has handled this event, whether or not
+  /// it had anything to send. The claim is one conditional update on this column, so an event is
+  /// pushed at most once even with two dispatchers running.
+  pushedAt   DateTime?
 
   @@index([jobId, createdAt])
   @@index([contractId])
+  @@index([pushedAt, createdAt])
   @@map("contract_events")
 }
 
