@@ -311,7 +311,7 @@ describe("HTTP routes (real server, real paystack.js client, fake Paystack over 
     assert.equal(sub.status, 200, JSON.stringify(sub.json));
     assert.ok(Math.abs(new Date(sub.json.contract.reviewDueAt).getTime() - (t1 + 3 * 86400_000)) < 15_000);
     const trail = (await prisma.contractEvent.findMany({ where: { jobId: job.id }, orderBy: { createdAt: "asc" } })).map((e) => e.type);
-    assert.deepEqual(trail, ["awarded", "checkout_started", "submitted"]);
+    assert.deepEqual(trail, ["awarded", "checkout_started", "funded", "submitted"]);
   });
 
   it("a webhook with a bad signature is rejected and changes nothing", async () => {
