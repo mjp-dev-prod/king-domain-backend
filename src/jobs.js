@@ -9,6 +9,7 @@
 const { RULES, baseDeps, refuse } = require("./contractCore");
 const paystack = require("./paystack");
 const lifecycle = require("./contractLifecycle");
+const { lockLive } = require("./accounts");
 
 const jobInclude = { client: true, contract: true, _count: { select: { applications: true } } };
 const loadJob = (prisma, id) => prisma.job.findUnique({ where: { id }, include: jobInclude });
@@ -33,6 +34,22 @@ function validateJobInput(body) {
     return refuse(400, "invalid", `deliveryDays must be a whole number of days from ${RULES.deliveryDays.min} to ${RULES.deliveryDays.max}.`);
   }
   return { ok: true, value: { title: title.trim(), category: category.trim(), description: description.trim(), budget: budgetNum, deliveryDays: days } };
+}
+
+/**
+ * A client posts a job. The client's row is share-locked and checked first (src/accounts.js), so a job
+ * can never be created for someone whose account is being deleted at that moment.
+ */
+async function postJob({ clientId, input }, deps) {
+  const { prisma } = baseDeps(deps);
+  const checked = validateJobInput(input);
+  if (!checked.ok) return checked;
+  const created = await prisma.$transaction(async (trx) => {
+    const unavailable = await lockLive(trx, [clientId]);
+    if (unavailable) return unavailable;
+    return trx.job.create({ data: { clientId, ...checked.value }, include: jobInclude });
+  });
+  return created.ok === false ? created : { ok: true, job: created };
 }
 
 /** Why a guarded update touched nothing, from the row as it is now. Null when the row is open. */
@@ -112,6 +129,8 @@ async function applyToJob({ jobId, talentId, revision }, deps) {
 
   try {
     const application = await prisma.$transaction(async (trx) => {
+      const unavailable = await lockLive(trx, [talentId]);
+      if (unavailable) return unavailable;
       const { count } = await trx.job.updateMany({
         where: { id: job.id, closedAt: null, awardedApplicationId: null, ...(revision === undefined ? {} : { revision }) },
         data: { lastAppliedAt: now() },
@@ -119,6 +138,7 @@ async function applyToJob({ jobId, talentId, revision }, deps) {
       if (count === 0) return null;
       return trx.application.create({ data: { jobId: job.id, talentId }, include: { talent: true } });
     });
+    if (application?.ok === false) return application;
     if (application) return { ok: true, application };
   } catch (err) {
     // The @@unique([jobId, talentId]) in schema.prisma: a double apply is a clean 409.
@@ -151,7 +171,9 @@ async function awardJob({ jobId, clientId, applicationId }, deps) {
   if (!winning || winning.jobId !== job.id) return refuse(404, "not_found", "Application not found on this job.");
 
   const platformFeeAmount = paystack.calculatePlatformFee(job.budget);
-  const contract = await prisma.$transaction(async (trx) => {
+  const awarded = await prisma.$transaction(async (trx) => {
+    const unavailable = await lockLive(trx, [job.clientId, winning.talentId]);
+    if (unavailable) return unavailable;
     const { count } = await trx.job.updateMany({
       where: { id: job.id, awardedApplicationId: null, closedAt: null },
       data: { awardedApplicationId: winning.id },
@@ -163,6 +185,8 @@ async function awardJob({ jobId, clientId, applicationId }, deps) {
       data: { jobId: job.id, status: "awaitingPayment", platformFeeAmount, payByAt: new Date(Date.now() + lifecycle.WINDOWS.paymentMs) },
     });
   });
+  if (awarded?.ok === false) return awarded;
+  const contract = awarded;
   if (!contract) {
     const fresh = await prisma.job.findUnique({ where: { id: job.id } });
     return fresh?.closedAt ? refuse(409, "closed", MSG.closed) : refuse(400, "awarded", MSG.awarded);
@@ -176,4 +200,4 @@ async function awardJob({ jobId, clientId, applicationId }, deps) {
   return { ok: true, contract };
 }
 
-module.exports = { validateJobInput, jobInclude, loadJob, stateRefusal, editJob, closeJob, applyToJob, awardJob, MSG };
+module.exports = { validateJobInput, jobInclude, loadJob, stateRefusal, postJob, editJob, closeJob, applyToJob, awardJob, MSG };

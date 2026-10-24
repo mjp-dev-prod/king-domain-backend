@@ -233,6 +233,14 @@ async function uploadAvatar({ userId, buffer, contentType, extension }) {
   return path;
 }
 
+/** Removes files from a private bucket (account deletion). Missing files are not an error. */
+async function removePrivateFiles(bucket, paths) {
+  if (!supabase) throw new Error("Supabase Storage is not configured — set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.");
+  if (!paths.length) return;
+  const { error } = await supabase.storage.from(bucket).remove(paths);
+  if (error) throw new Error(`Supabase remove failed: ${error.message}`);
+}
+
 async function removeAvatar(path) {
   if (!supabase) throw new Error("Supabase Storage is not configured — set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.");
   const { error } = await supabase.storage.from(AVATARS_BUCKET).remove([path]);
@@ -242,6 +250,7 @@ async function removeAvatar(path) {
 module.exports = {
   uploadAvatar,
   removeAvatar,
+  removePrivateFiles,
   avatarPublicUrl,
   apkKey,
   apkPublicUrl,

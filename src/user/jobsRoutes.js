@@ -182,15 +182,10 @@ router.get("/:id", async (req, res) => {
 });
 
 router.post("/", requireClient, async (req, res) => {
-  const checked = jobsService.validateJobInput(req.body);
-  if (!checked.ok) return res.status(checked.status).json({ error: checked.error });
+  const result = await jobsService.postJob({ clientId: req.user.id, input: req.body });
+  if (!result.ok) return res.status(result.status).json({ error: result.error, code: result.code });
 
-  const job = await prisma.job.create({
-    data: { clientId: req.user.id, ...checked.value },
-    include: jobsService.jobInclude,
-  });
-
-  return res.status(201).json({ job: await serializeJob(job) });
+  return res.status(201).json({ job: await serializeJob(result.job) });
 });
 
 /**

@@ -47,6 +47,9 @@ function fakeProvider({ refusePayouts = false, transferStatus = "success", trans
     transfers,
     payouts,
     initialised,
+    // DELETE /transferrecipient/:code (paystack.com/docs/api/transfer-recipient): sets it inactive.
+    deletedRecipients: [],
+    refuseRecipientDelete: false,
     transactions,
     verifyTransfer: async (ref) => transfers.get(ref) ?? null,
     initiateTransfer: async ({ reference, amountNaira }) => {
@@ -76,6 +79,12 @@ function serveFakeProvider(provider) {
       if (url.pathname === "/transaction/initialize") {
         provider.initialised.push(body);
         return send(200, { status: true, data: { authorization_url: `https://checkout.test/${body.reference}`, access_code: "ac", reference: body.reference } });
+      }
+      const recipient = url.pathname.match(/^\/transferrecipient\/(.+)$/);
+      if (req.method === "DELETE" && recipient) {
+        if (provider.refuseRecipientDelete) return send(500, { status: false, message: "Paystack is having a bad day" });
+        provider.deletedRecipients.push(decodeURIComponent(recipient[1]));
+        return send(200, { status: true, message: "Transfer recipient set as inactive" });
       }
       const verify = url.pathname.match(/^\/transaction\/verify\/(.+)$/);
       if (verify) {

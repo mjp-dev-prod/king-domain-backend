@@ -6,6 +6,7 @@ const { rateLimit } = require("../admin/rateLimit");
 const mailer = require("../admin/mailer");
 const { uploadProofFile, getProofFileSignedUrl, uploadAvatar, removeAvatar, avatarPublicUrl } = require("../storage");
 const paystack = require("../paystack");
+const accounts = require("../accounts");
 const auth = require("./auth");
 const jwtUtil = require("./jwt");
 
@@ -418,6 +419,29 @@ router.post(
     mailer.sendUserPasswordChanged({ to: user.email }).catch((err) =>
       console.error("reset-password: failed to send changed notice:", err),
     );
+    return res.json({ ok: true });
+  },
+);
+
+/**
+ * Delete the signed-in person's account (src/accounts.js). Needs the password again: a stolen phone or
+ * token must not be enough to wipe an account. A wrong password is 403, not 401, because the app treats
+ * a 401 as an expired session, refreshes and retries, which would spend a second attempt.
+ */
+router.delete(
+  "/me",
+  requireUser,
+  rateLimit({ windowMs: 15 * 60 * 1000, max: 5, key: "user_delete_account", by: (req) => req.user.id }),
+  async (req, res) => {
+    const { password } = req.body ?? {};
+    if (typeof password !== "string" || !password) {
+      return res.status(400).json({ error: "Enter your password to delete your account.", code: "invalid" });
+    }
+    if (!(await auth.verifyPassword(req.user.passwordHash, password))) {
+      return res.status(403).json({ error: "That password is incorrect.", code: "wrong_password" });
+    }
+    const result = await accounts.deleteAccount({ userId: req.user.id });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, code: result.code, contracts: result.contracts });
     return res.json({ ok: true });
   },
 );

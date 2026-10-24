@@ -121,6 +121,20 @@ async function createTransferRecipient({ accountNumber, bankCode, accountName })
 }
 
 /**
+ * Account deletion: sets the recipient inactive (paystack.com/docs/api/transfer-recipient, "Delete
+ * Transfer Recipient"). Paystack keeps its own record of past transfers; this only stops it being a
+ * live payout target. A recipient Paystack no longer has (404) counts as done.
+ */
+async function deleteTransferRecipient(recipientCode) {
+  try {
+    await paystackFetch(`/transferrecipient/${encodeURIComponent(recipientCode)}`, { method: "DELETE" });
+  } catch (err) {
+    if (err.httpStatus === 404) return;
+    throw err;
+  }
+}
+
+/**
  * The actual "release payment" action — moves money out of our Paystack
  * balance to the talent's bank account. amountNaira here is the job
  * budget ONLY, never budget + platform fee — the fee stays in our balance.
@@ -163,6 +177,7 @@ module.exports = {
   listBanks,
   resolveAccountNumber,
   createTransferRecipient,
+  deleteTransferRecipient,
   initiateTransfer,
   verifyTransfer,
 };

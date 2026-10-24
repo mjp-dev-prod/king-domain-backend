@@ -285,6 +285,9 @@ model User {
   /// Path of the profile photo in the PUBLIC `avatars` bucket (`<userId>/<timestamp>.<ext>`), or
   /// null. The public link is derived from it, so the database never holds a link that could go stale.
   photoPath    String?
+  /// Set when the person deletes their account (src/accounts.js). The row stays, anonymised, because a
+  /// finished job is also a payment record. Awards, applications and new jobs refuse a user with this set.
+  deletedAt    DateTime?
   /// Sprint 4: signup creates the account immediately (unverified) so the
   /// user is already logged in while they verify — matching
   /// VerifyEmailScreen's real UX (enter the code, land straight in the

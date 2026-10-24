@@ -425,8 +425,23 @@ function sendUserPasswordChanged({ to }) {
   });
 }
 
+/** Sent to the OLD address once deletion is done; the account no longer exists to look this up in. */
+function sendAccountDeleted({ to }) {
+  return send({
+    to,
+    subject: "Your King Domain account has been deleted",
+    html: `
+      <p>Your King Domain account has been deleted, as you asked. Your profile, photo, sign-in details and any payout account you saved have been removed.</p>
+      <p>Records of finished jobs and payments are kept, without your name, because the other person's work history and our payment records depend on them. Paystack keeps its own transaction records.</p>
+      ${process.env.SUPPORT_EMAIL ? `<p>If you didn't ask for this, write to ${escapeHtml(process.env.SUPPORT_EMAIL)} straight away.</p>` : ""}
+    `,
+    fallbackContext: `account deleted notice for ${to}`,
+  });
+}
+
 module.exports = {
   isReservedRecipient,
+  sendAccountDeleted,
   sendPasswordReset,
   sendInvite,
   sendNewDecisionNotice,
