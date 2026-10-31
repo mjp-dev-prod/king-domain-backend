@@ -10,6 +10,10 @@ const { RULES, baseDeps, refuse } = require("./contractCore");
 const paystack = require("./paystack");
 const lifecycle = require("./contractLifecycle");
 const { lockLive } = require("./accounts");
+const briefs = require("./briefs");
+const safety = require("./safety");
+const { skillByKey, CATEGORIES } = require("./skills");
+const { capState } = require("./discoveryRules");
 
 const jobInclude = { client: true, contract: true, _count: { select: { applications: true } } };
 const loadJob = (prisma, id) => prisma.job.findUnique({ where: { id }, include: jobInclude });
@@ -21,8 +25,57 @@ const MSG = {
   locked: "Someone has already applied, so the terms are locked. Close this job and post a new one to change them.",
 };
 
+const categoryLabelOf = (skill) => CATEGORIES.find((c) => c.key === skill.category)?.label ?? skill.category;
+
+/**
+ * The structured post (S3): a skill, a job type, a brief checked against that skill and type, a price and currency,
+ * delivery days, up to three screening questions and who may see it. Milestone, monthly and hourly jobs derive what
+ * they can (src/briefs.js says what `budget` means for each).
+ */
+function validateStructuredJob(body) {
+  const { title, description, skillKey, jobType, brief, price, currency, deliveryDays, screeningQuestions, visibility } = body;
+  if (typeof title !== "string" || title.trim().length < 5) return refuse(400, "invalid", "Give the job a title of at least 5 characters.");
+  if (typeof description !== "string" || description.trim().length < 20) return refuse(400, "invalid", "Describe the job in at least 20 characters.");
+  const skill = skillByKey(skillKey);
+  if (!skill) return refuse(400, "invalid", "Choose a skill from the list.");
+  const cur = currency ?? "NGN";
+  if (!briefs.CURRENCIES.includes(cur)) return refuse(400, "invalid", "Price the job in naira or dollars.");
+  const vis = visibility ?? "public";
+  if (!briefs.VISIBILITY.includes(vis)) return refuse(400, "invalid", "Choose public or invite-only.");
+  const checked = briefs.validateBrief({ skillKey, jobType, brief, price });
+  if (!checked.ok) return refuse(400, "invalid", checked.error, checked.field);
+  const questions = briefs.validateScreeningQuestions(screeningQuestions);
+  if (!questions.ok) return refuse(400, "invalid", questions.error);
+
+  let days = Number(deliveryDays);
+  if (jobType === "milestones") days = Math.min(RULES.deliveryDays.max, checked.brief.milestones.reduce((n, m) => n + m.days, 0));
+  else if (jobType === "monthly") days = 30;
+  else if (jobType === "hourly") days = 7;
+  if (!Number.isInteger(days) || days < RULES.deliveryDays.min || days > RULES.deliveryDays.max) {
+    return refuse(400, "invalid", `Delivery is ${RULES.deliveryDays.min} to ${RULES.deliveryDays.max} days.`);
+  }
+  return {
+    ok: true,
+    structured: true,
+    value: {
+      title: title.trim(),
+      category: categoryLabelOf(skill),
+      description: description.trim(),
+      budget: checked.budget,
+      deliveryDays: days,
+      skillKey,
+      jobType,
+      brief: checked.brief,
+      currency: cur,
+      visibility: vis,
+      screeningQuestions: questions.questions,
+    },
+  };
+}
+
 /** The fields a client sets when posting or editing a job, checked and trimmed. */
 function validateJobInput(body) {
+  if (body && typeof body === "object" && body.skillKey !== undefined) return validateStructuredJob(body);
   const { title, category, description, budget, deliveryDays } = body ?? {};
   if (typeof title !== "string" || !title.trim()) return refuse(400, "invalid", "title is required.");
   if (typeof category !== "string" || !category.trim()) return refuse(400, "invalid", "category is required.");
@@ -36,6 +89,17 @@ function validateJobInput(body) {
   return { ok: true, value: { title: title.trim(), category: category.trim(), description: description.trim(), budget: budgetNum, deliveryDays: days } };
 }
 
+/** Codes the detector found that always hold a post for a person, even from an established client (D17, D18). */
+const HOLD_CODES = ["outside_payment", "pay_to_apply", "apk"];
+
+/** Whether this post goes live now or waits for a person: a client's first post, or anything that asks for money or a program. */
+async function screeningDecision(prisma, clientId, value) {
+  const flags = safety.detectRisk(safety.jobPostText(value));
+  const before = await prisma.job.count({ where: { clientId, postStatus: "live" } });
+  const hold = before === 0 || flags.some((f) => HOLD_CODES.includes(f.code));
+  return { flags, hold, reason: before === 0 ? "first_post" : flags.some((f) => HOLD_CODES.includes(f.code)) ? "flagged" : null };
+}
+
 /**
  * A client posts a job. The client's row is share-locked and checked first (src/accounts.js), so a job
  * can never be created for someone whose account is being deleted at that moment.
@@ -44,12 +108,27 @@ async function postJob({ clientId, input }, deps) {
   const { prisma } = baseDeps(deps);
   const checked = validateJobInput(input);
   if (!checked.ok) return checked;
+  // The old shape (no skill) stays as it was: live at once. Structured posts are screened (D17).
+  let screening = { hold: false, flags: [], reason: null };
+  if (checked.structured) screening = await screeningDecision(prisma, clientId, checked.value);
+  const at = new Date();
   const created = await prisma.$transaction(async (trx) => {
     const unavailable = await lockLive(trx, [clientId]);
     if (unavailable) return unavailable;
-    return trx.job.create({ data: { clientId, ...checked.value }, include: jobInclude });
+    return trx.job.create({
+      data: {
+        clientId,
+        ...checked.value,
+        postStatus: screening.hold ? "screening" : "live",
+        liveAt: screening.hold ? null : at,
+        screeningFlags: screening.flags.length ? screening.flags : undefined,
+      },
+      include: jobInclude,
+    });
   });
-  return created.ok === false ? created : { ok: true, job: created };
+  if (created.ok === false) return created;
+  console.log(`jobs: posted job=${created.id} client=${clientId} structured=${Boolean(checked.structured)} status=${created.postStatus} screeningReason=${screening.reason} flags=${screening.flags.map((f) => f.code).join(",") || "none"} readBack=${(await prisma.job.count({ where: { id: created.id, postStatus: created.postStatus } })) === 1}`);
+  return { ok: true, job: created, screening };
 }
 
 /** Why a guarded update touched nothing, from the row as it is now. Null when the row is open. */
@@ -75,11 +154,19 @@ async function editJob({ jobId, clientId, input }, deps) {
   if (!job) return refuse(404, "not_found", "Job not found.");
   if (job.clientId !== clientId) return refuse(403, "not_yours", "Not your job.");
 
+  // Editing a post a person turned down sends it back for another look (with a fresh scan).
+  const resubmit = job.postStatus === "rejected";
+  const flags = checked.structured ? safety.detectRisk(safety.jobPostText(checked.value)) : [];
   const { count } = await prisma.job.updateMany({
     where: { id: job.id, clientId, closedAt: null, awardedApplicationId: null, lastAppliedAt: null, applications: { none: {} } },
-    data: { ...checked.value, revision: { increment: 1 } },
+    data: {
+      ...checked.value,
+      revision: { increment: 1 },
+      ...(resubmit ? { postStatus: "screening", rejectReasonCode: null, rejectNote: null, screenedAt: null, screenedById: null } : {}),
+      ...(checked.structured ? { screeningFlags: flags.length ? flags : null } : {}),
+    },
   });
-  if (count === 1) return { ok: true, job: await loadJob(prisma, job.id) };
+  if (count === 1) return { ok: true, job: await loadJob(prisma, job.id), resubmitted: resubmit };
 
   return (await stateRefusal(prisma, job.id, { editing: true })) ?? refuse(409, "has_applicants", MSG.locked);
 }
@@ -104,7 +191,7 @@ async function closeJob({ jobId, clientId }, deps) {
       data: { closedAt: now() },
     });
     if (count === 0) return false;
-    await trx.application.updateMany({ where: { jobId: job.id, status: "pending" }, data: { status: "notSelected" } });
+    await trx.application.updateMany({ where: { jobId: job.id, status: { in: ["pending", "shortlisted"] } }, data: { status: "notSelected" } });
     return true;
   });
   if (closed) return { ok: true, job: await loadJob(prisma, job.id) };
@@ -120,12 +207,34 @@ async function closeJob({ jobId, clientId }, deps) {
  * looked at it. Setting lastAppliedAt is also what locks the terms (editJob).
  * The caller has already checked verified-in-category and the payout account.
  */
-async function applyToJob({ jobId, talentId, revision }, deps) {
+async function applyToJob({ jobId, talentId, revision, answer, pieces, screeningAnswers }, deps) {
   const { prisma, now } = baseDeps(deps);
   const job = await prisma.job.findUnique({ where: { id: jobId } });
   if (!job) return refuse(404, "not_found", "Job not found.");
   if (job.closedAt) return refuse(409, "closed", MSG.closed);
   if (job.awardedApplicationId) return refuse(400, "awarded", MSG.awarded);
+
+  // A structured job (S3) asks for more than a name: an answer, the work that fits, the client's questions.
+  let extra = {};
+  if (job.skillKey) {
+    if (job.postStatus !== "live") return refuse(409, "not_live", "This job isn't open yet.");
+    const invitation = await prisma.invitation.findFirst({ where: { jobId: job.id, talentId, status: { in: ["pending", "accepted"] }, expiresAt: { gt: now() } } });
+    if (job.visibility === "invite" && !invitation) return refuse(403, "invite_only", "This job is invite-only, and you haven't been invited.");
+    // An invited talent may apply even when the cap has paused the job (the client asked them).
+    if (!invitation) {
+      const count = await prisma.application.count({ where: { jobId: job.id, ...(job.reopenedAt ? { createdAt: { gte: job.reopenedAt } } : {}) } });
+      const cap = capState({ applicantCount: count, openedAt: job.reopenedAt ?? job.liveAt ?? job.createdAt, now: now() });
+      if (cap.paused) return refuse(409, "cap_paused", cap.reason === "applicants" ? "This job has all the applications it can take for now." : "This job has been open for 5 days, so applications are paused.");
+    }
+    const text = typeof answer === "string" ? answer.trim() : "";
+    if (text.length < 20 || text.length > 1500) return refuse(400, "invalid", "Answer the brief in 20 to 1500 characters.");
+    const questions = Array.isArray(job.screeningQuestions) ? job.screeningQuestions : [];
+    const given = Array.isArray(screeningAnswers) ? screeningAnswers.map((a) => (typeof a === "string" ? a.trim() : "")) : [];
+    if (given.length !== questions.length || given.some((a) => !a || a.length > 500)) return refuse(400, "invalid", "Answer every question the client asked (up to 500 characters each).");
+    const picked = await checkPieces(prisma, talentId, job.skillKey, pieces);
+    if (!picked.ok) return picked;
+    extra = { answer: text, pieces: picked.pieces, screeningAnswers: given, invitationId: invitation?.id ?? null };
+  }
 
   try {
     const application = await prisma.$transaction(async (trx) => {
@@ -136,7 +245,9 @@ async function applyToJob({ jobId, talentId, revision }, deps) {
         data: { lastAppliedAt: now() },
       });
       if (count === 0) return null;
-      return trx.application.create({ data: { jobId: job.id, talentId }, include: { talent: true } });
+      const made = await trx.application.create({ data: { jobId: job.id, talentId, ...extra }, include: { talent: true } });
+      if (extra.invitationId) await trx.invitation.update({ where: { id: extra.invitationId }, data: { status: "accepted", respondedAt: now() } });
+      return made;
     });
     if (application?.ok === false) return application;
     if (application) return { ok: true, application };
@@ -180,7 +291,7 @@ async function awardJob({ jobId, clientId, applicationId }, deps) {
     });
     if (count === 0) return null;
     await trx.application.update({ where: { id: winning.id }, data: { status: "selected" } });
-    await trx.application.updateMany({ where: { jobId: job.id, id: { not: winning.id } }, data: { status: "notSelected" } });
+    await trx.application.updateMany({ where: { jobId: job.id, id: { not: winning.id }, status: { not: "declined" } }, data: { status: "notSelected" } });
     return trx.contract.create({
       data: { jobId: job.id, status: "awaitingPayment", platformFeeAmount, payByAt: new Date(Date.now() + lifecycle.WINDOWS.paymentMs) },
     });
@@ -200,4 +311,29 @@ async function awardJob({ jobId, clientId, applicationId }, deps) {
   return { ok: true, contract };
 }
 
-module.exports = { validateJobInput, jobInclude, loadJob, stateRefusal, postJob, editJob, closeJob, applyToJob, awardJob, MSG };
+/**
+ * 1 to 3 pieces of VERIFIED work the talent chooses to show for this application. A piece is either one of the pieces
+ * of a verified skill submission in this skill (S2), or an older verified proof item. Nothing unverified can be shown.
+ */
+async function checkPieces(prisma, talentId, skillKey, pieces) {
+  const list = Array.isArray(pieces) ? pieces : [];
+  if (list.length < 1 || list.length > 3) return refuse(400, "invalid", "Choose 1 to 3 pieces of your verified work to show.");
+  const out = [];
+  for (const piece of list) {
+    if (!piece || typeof piece.id !== "string") return refuse(400, "invalid", "A chosen piece wasn't understood.");
+    if (piece.type === "piece") {
+      const found = await prisma.submissionPiece.findFirst({ where: { id: piece.id, submission: { userId: talentId, skillKey, status: "verified" } }, select: { id: true } });
+      if (!found) return refuse(400, "invalid", "You can only show pieces from your verified work in this skill.");
+    } else if (piece.type === "proof") {
+      const found = await prisma.proofItem.findFirst({ where: { id: piece.id, status: "verified", talentProfile: { userId: talentId } }, select: { id: true } });
+      if (!found) return refuse(400, "invalid", "You can only show verified work.");
+    } else {
+      return refuse(400, "invalid", "A chosen piece wasn't understood.");
+    }
+    if (out.some((o) => o.id === piece.id)) return refuse(400, "invalid", "You chose the same piece twice.");
+    out.push({ type: piece.type, id: piece.id });
+  }
+  return { ok: true, pieces: out };
+}
+
+module.exports = { checkPieces, validateJobInput, jobInclude, loadJob, stateRefusal, postJob, editJob, closeJob, applyToJob, awardJob, MSG };

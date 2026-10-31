@@ -528,7 +528,44 @@ function sendSkillAuthenticity({ to, name, skillLabel, outcome, note, until }) {
   });
 }
 
+/** A client declined an application: the talent is told (D21). */
+function sendApplicationDeclined({ to, name, jobTitle }) {
+  return send({
+    to,
+    subject: "Update on your application",
+    html: `<p>Hi ${escapeHtml(name)},</p><p>The client chose not to go ahead with your application for <strong>${escapeHtml(jobTitle)}</strong>. That is no comment on your work: clients often pick one person among many. Other jobs in your skill are waiting in the app.</p>`,
+    fallbackContext: `application declined for ${to}: ${jobTitle}`,
+  });
+}
+
+/** A held job post was not approved: say why and what to change. */
+function sendJobPostRejected({ to, name, jobTitle, reasonLabel, note }) {
+  return send({
+    to,
+    subject: "Your job needs a change before it goes live",
+    html: `
+      <p>Hi ${escapeHtml(name)},</p>
+      <p>We couldn't put <strong>${escapeHtml(jobTitle)}</strong> live yet: <strong>${escapeHtml(reasonLabel)}</strong>.</p>
+      ${note ? `<p>${escapeHtml(note)}</p>` : ""}
+      <p>Open the job in the app, change it, and it goes back for another look. Nothing you wrote is lost.</p>
+    `,
+    fallbackContext: `job post rejected for ${to}: ${reasonLabel}`,
+  });
+}
+
+function sendShortlistReady({ to, name }) {
+  return send({
+    to,
+    subject: "Your shortlist is ready",
+    html: `<p>Hi ${escapeHtml(name)},</p><p>We found verified talents for your request. Each one was asked first and said they are available. Open the app to see them and why we picked each.</p>`,
+    fallbackContext: `shortlist ready for ${to}`,
+  });
+}
+
 module.exports = {
+  sendApplicationDeclined,
+  sendJobPostRejected,
+  sendShortlistReady,
   sendSkillVerified,
   sendSkillNotYet,
   sendSkillAuthenticity,

@@ -47,8 +47,8 @@ function recordEvent(db, { jobId, contractId, type, meta }) {
 }
 
 /** A refused action or a lost race, in the shape the routes return. */
-function refuse(status, code, error) {
-  return { ok: false, status, code, error };
+function refuse(status, code, error, field) {
+  return field ? { ok: false, status, code, error, field } : { ok: false, status, code, error };
 }
 
 function validReason(reason) {

@@ -84,6 +84,13 @@ async function deleteAccount({ userId }, deps = {}) {
         await trx.skillSubmission.deleteMany({ where: { userId } });
         await trx.skillRestriction.deleteMany({ where: { userId } });
 
+        // Discovery (S3): saved searches and talents, invitations either way, and shortlist requests go with the person.
+        await trx.savedSearch.deleteMany({ where: { userId } });
+        await trx.savedTalent.deleteMany({ where: { OR: [{ clientId: userId }, { talentId: userId }] } });
+        await trx.invitation.deleteMany({ where: { OR: [{ clientId: userId }, { talentId: userId }] } });
+        await trx.shortlistItem.deleteMany({ where: { talentId: userId } });
+        await trx.shortlistRequest.deleteMany({ where: { clientId: userId } });
+
         const noContract = { contract: { is: null } };
         const counts = {};
         counts.sessions = (await trx.userSession.deleteMany({ where: { userId } })).count;

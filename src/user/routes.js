@@ -71,6 +71,10 @@ async function requireUser(req, res, next) {
 
   req.user = session.user;
   req.sessionId = session.id;
+  const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+  if (!session.user.lastActiveAt || session.user.lastActiveAt < tenMinutesAgo) {
+    prisma.user.updateMany({ where: { id: session.user.id, lastActiveAt: { lt: tenMinutesAgo } }, data: { lastActiveAt: new Date() } }).catch(() => {});
+  }
   next();
 }
 

@@ -103,6 +103,39 @@ const QUEUES = [
       return rows.map((r) => r.decidedAt.getTime() - r.authenticityAt.getTime());
     },
   },
+  {
+    key: "job-post",
+    label: "Job posts",
+    capability: "safety",
+    path: "/job-posts",
+    defaultTargetMinutes: 4 * 60,
+    defaultWhenLate: "The client sees their post is still being read; nothing goes live.",
+    async openSince(db) {
+      const rows = await db.job.findMany({ where: { postStatus: "screening" }, select: { createdAt: true } });
+      return rows.map((r) => r.createdAt);
+    },
+    async resolvedDurationsMs(db) {
+      const rows = await db.job.findMany({ where: { screenedAt: { not: null } }, select: { createdAt: true, screenedAt: true }, orderBy: { screenedAt: "desc" }, take: RESOLVED_SAMPLE });
+      return rows.map((r) => r.screenedAt.getTime() - r.createdAt.getTime());
+    },
+  },
+  {
+    key: "shortlist",
+    label: "Shortlists",
+    capability: "support",
+    path: "/shortlists",
+    // The promise shown to clients is computed from real delivery times (D24); this is only the team's own alert line.
+    defaultTargetMinutes: 24 * 60,
+    defaultWhenLate: "The client keeps waiting; the promise they were shown is the 90th percentile of recent shortlists.",
+    async openSince(db) {
+      const rows = await db.shortlistRequest.findMany({ where: { status: { in: ["requested", "building"] } }, select: { clockStartedAt: true } });
+      return rows.map((r) => r.clockStartedAt);
+    },
+    async resolvedDurationsMs(db) {
+      const rows = await db.shortlistRequest.findMany({ where: { status: "sent", sentAt: { not: null } }, select: { clockStartedAt: true, sentAt: true }, orderBy: { sentAt: "desc" }, take: RESOLVED_SAMPLE });
+      return rows.map((r) => r.sentAt.getTime() - r.clockStartedAt.getTime());
+    },
+  },
 ];
 
 async function targetFor(db, queue) {

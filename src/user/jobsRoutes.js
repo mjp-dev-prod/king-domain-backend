@@ -12,6 +12,11 @@ const changes = require("../contractChanges");
 const extensions = require("../contractExtensions");
 const jobsService = require("../jobs");
 const { requireVerifiedIdentity } = require("./identityGate");
+const discovery = require("../discovery");
+const discoveryRules = require("../discoveryRules");
+const { capState } = discoveryRules;
+const { skillByKey } = require("../skills");
+const { recordAudit } = require("../admin/audit");
 
 const router = express.Router();
 router.use(requireUser);
@@ -41,15 +46,36 @@ async function serializeJob(job, viewerApplications) {
     budget: job.budget.toString(),
     deliveryDays: job.deliveryDays ?? null,
     client: job.client
-      ? { id: job.client.id, fullName: job.client.fullName, email: job.client.email, photoUrl: avatarPublicUrl(job.client.photoPath) }
+      ? { id: job.client.id, fullName: job.client.fullName, photoUrl: avatarPublicUrl(job.client.photoPath) } // never the email: no contact details before award (D18)
       : undefined,
     awardedApplicationId: job.awardedApplicationId,
     closedAt: job.closedAt ?? null,
     revision: job.revision ?? 0,
+    ...structuredFields(job),
     applicationCount: job._count?.applications,
     myApplicationStatus: mine?.status ?? null,
     createdAt: job.createdAt,
     contract: job.contract ? await serializeContract(job.contract) : null,
+  };
+}
+
+/** What a structured (S3) job adds to the old shape. Old jobs have a null skill and read as one delivery in naira. */
+function structuredFields(job) {
+  const count = job._count?.applications ?? 0;
+  const cap = capState({ applicantCount: job._openCount ?? count, openedAt: job.reopenedAt ?? job.liveAt ?? job.createdAt });
+  return {
+    skillKey: job.skillKey ?? null,
+    skillLabel: job.skillKey ? skillByKey(job.skillKey)?.label ?? job.skillKey : null,
+    jobType: job.jobType ?? "oneDelivery",
+    currency: job.currency ?? "NGN",
+    visibility: job.visibility ?? "public",
+    postStatus: job.postStatus ?? "live",
+    brief: job.brief ?? null,
+    screeningQuestions: Array.isArray(job.screeningQuestions) ? job.screeningQuestions : [],
+    applicantCap: discoveryRules.RULES.applicantCap,
+    paused: job.skillKey ? cap.paused : false,
+    pausedReason: job.skillKey ? cap.reason : null,
+    rejection: job.postStatus === "rejected" ? { reasonCode: job.rejectReasonCode, note: job.rejectNote } : null,
   };
 }
 
@@ -146,26 +172,22 @@ function requireClient(req, res, next) {
 
 // ── Jobs ─────────────────────────────────────────────────
 
-/** Open job feed. Optional ?category= filter, matching job_feed_screen.dart's picker. */
+/**
+ * The job feed. Server-side filters and paging (S3): skill, type, market, budget, delivery, verified client, few
+ * applicants, words; forYou puts jobs in the talent's verified skills first. The old ?category= still works.
+ */
 router.get("/", async (req, res) => {
-  const { category } = req.query;
-  const jobs = await prisma.job.findMany({
-    where: {
-      AND: [
-        category ? { category: String(category) } : {},
-        // A closed job stays visible to its owner and to talents who applied to it.
-        { OR: [{ closedAt: null }, { clientId: req.user.id }, { applications: { some: { talentId: req.user.id } } }] },
-      ],
-    },
-    orderBy: { createdAt: "desc" },
-    include: {
-      client: true,
-      contract: true,
-      _count: { select: { applications: true } },
-      applications: { where: { talentId: req.user.id } },
-    },
-  });
-  return res.json({ jobs: await Promise.all(jobs.map((job) => serializeJob(job, job.applications))) });
+  const query = { ...req.query };
+  if (query.category && !query.skill) query.category = String(query.category);
+  const result = await discovery.feedJobs(req.user, query);
+  if (req.query.category) result.jobs = result.jobs.filter((j) => j.skillLabel === req.query.category);
+  // A job the viewer is a party to carries its contract, as the Work tab has always read it from here.
+  const mine = result.jobs.filter((j) => j.mine || j.myApplicationStatus).map((j) => j.id);
+  if (mine.length) {
+    const contracts = new Map((await prisma.contract.findMany({ where: { jobId: { in: mine } } })).map((c) => [c.jobId, c]));
+    for (const j of result.jobs) if (contracts.has(j.id)) j.contract = await serializeContract(contracts.get(j.id));
+  }
+  return res.json(result);
 });
 
 router.get("/:id", async (req, res) => {
@@ -179,14 +201,23 @@ router.get("/:id", async (req, res) => {
     },
   });
   if (!job) return res.status(404).json({ error: "Job not found." });
-  return res.json({ job: await serializeJob(job, job.applications) });
+  await discovery.attachOpenCounts(prisma, [job]);
+  // A held or turned-down post is for its owner and the team only.
+  if (job.postStatus !== "live" && job.clientId !== req.user.id) return res.status(404).json({ error: "Job not found." });
+  const [record, invitation] = await Promise.all([
+    discovery.clientRecord(prisma, job.clientId),
+    prisma.invitation.findFirst({ where: { jobId: job.id, talentId: req.user.id, status: { in: ["pending", "accepted"] }, expiresAt: { gt: new Date() } } }),
+  ]);
+  return res.json({ job: await serializeJob(job, job.applications), clientRecord: record, invitation: invitation ? { id: invitation.id, expiresAt: invitation.expiresAt, message: invitation.message } : null });
 });
 
 router.post("/", requireClient, requireVerifiedIdentity(), async (req, res) => {
   const result = await jobsService.postJob({ clientId: req.user.id, input: req.body });
-  if (!result.ok) return res.status(result.status).json({ error: result.error, code: result.code });
+  if (!result.ok) return res.status(result.status).json({ error: result.error, code: result.code, field: result.field });
 
-  return res.status(201).json({ job: await serializeJob(result.job) });
+  // A live post tells talents with a matching saved search. Best effort: a failure here never undoes the post.
+  if (result.job.postStatus === "live") discovery.alertSavedSearches(result.job).catch((e) => console.error("saved-search alerts failed:", e.message));
+  return res.status(201).json({ job: await serializeJob(result.job), heldForScreening: result.job.postStatus === "screening", screeningReason: result.screening?.reason ?? null });
 });
 
 /**
@@ -196,8 +227,8 @@ router.post("/", requireClient, requireVerifiedIdentity(), async (req, res) => {
  */
 router.patch("/:id", requireClient, async (req, res) => {
   const result = await jobsService.editJob({ jobId: req.params.id, clientId: req.user.id, input: req.body });
-  if (!result.ok) return res.status(result.status).json({ error: result.error, code: result.code });
-  return res.json({ job: await serializeJob(result.job) });
+  if (!result.ok) return res.status(result.status).json({ error: result.error, code: result.code, field: result.field });
+  return res.json({ job: await serializeJob(result.job), resubmitted: Boolean(result.resubmitted) });
 });
 
 /** Close an open job: final, hides it from other talents, ends pending applications. */
@@ -221,11 +252,18 @@ router.post("/:id/apply", requireTalentProfile, requireVerifiedIdentity(), async
   const job = await prisma.job.findUnique({ where: { id: req.params.id } });
   if (!job) return res.status(404).json({ error: "Job not found." });
 
-  const verifiedInCategory = await prisma.proofItem.findFirst({
-    where: { talentProfileId: req.talentProfile.id, category: job.category, status: "verified" },
-  });
-  if (!verifiedInCategory) {
-    return res.status(403).json({ error: `You need Verified status in ${job.category} to apply.` });
+  // A job with a skill needs Verified in THAT skill (a verified submission, or an older proof item of its own).
+  // The older category check stays for jobs posted before skills.
+  let verifiedHere;
+  if (job.skillKey) {
+    verifiedHere =
+      (await prisma.skillSubmission.findFirst({ where: { userId: req.user.id, skillKey: job.skillKey, status: "verified" } })) ||
+      (await prisma.proofItem.findFirst({ where: { talentProfileId: req.talentProfile.id, category: job.category, status: "verified", NOT: { title: { endsWith: "(verified)" } } } }));
+  } else {
+    verifiedHere = await prisma.proofItem.findFirst({ where: { talentProfileId: req.talentProfile.id, category: job.category, status: "verified" } });
+  }
+  if (!verifiedHere) {
+    return res.status(403).json({ error: job.skillKey ? `You need to be verified in ${skillByKey(job.skillKey)?.label ?? job.category} to apply.` : `You need Verified status in ${job.category} to apply.`, code: "not_verified_in_skill" });
   }
 
   // Shareholder call (2026-10-01): a talent must be payable before they can
@@ -241,7 +279,8 @@ router.post("/:id/apply", requireTalentProfile, requireVerifiedIdentity(), async
     return res.status(400).json({ error: "revision must be a whole number." });
   }
 
-  const result = await jobsService.applyToJob({ jobId: job.id, talentId: req.user.id, revision });
+  const { answer, pieces, screeningAnswers } = req.body ?? {};
+  const result = await jobsService.applyToJob({ jobId: job.id, talentId: req.user.id, revision, answer, pieces, screeningAnswers });
   if (!result.ok) return res.status(result.status).json({ error: result.error, code: result.code });
   return res.status(201).json({ application: serializeApplication(result.application) });
 });
@@ -260,7 +299,70 @@ router.get("/:id/applications", requireClient, async (req, res) => {
     include: { talent: { include: { talentProfile: { include: { proofItems: true } } } } },
   });
   const signals = await Promise.all(applications.map((a) => applicantSignals(a.talent, job.category)));
-  return res.json({ applications: applications.map((a, i) => ({ ...serializeApplication(a), signals: signals[i] })) });
+  const count = job.reopenedAt ? applications.filter((a) => a.createdAt >= job.reopenedAt).length : applications.length;
+  const cap = capState({ applicantCount: count, openedAt: job.reopenedAt ?? job.liveAt ?? job.createdAt });
+  // Structured jobs also get the full panel (facts, chosen pieces, answers). Same order: when they applied.
+  const panels = job.skillKey ? await Promise.all(applications.map((a) => discovery.applicantPanel(a, job))) : [];
+  return res.json({
+    applications: applications.map((a, i) => ({ ...serializeApplication(a), signals: signals[i], panel: panels[i] ?? null })),
+    cap: { applicantCount: count, applicantCap: discoveryRules.RULES.applicantCap, paused: job.skillKey ? cap.paused : false, reason: job.skillKey ? cap.reason : null },
+  });
+});
+
+/** Shortlist or un-shortlist an applicant: the client's own working list. The talent is not told. */
+router.post("/:id/applications/:applicationId/shortlist", requireClient, async (req, res) => {
+  const job = await prisma.job.findUnique({ where: { id: req.params.id } });
+  if (!job || job.clientId !== req.user.id) return res.status(404).json({ error: "Job not found." });
+  const on = req.body?.shortlisted !== false;
+  const { count } = await prisma.application.updateMany({
+    where: { id: req.params.applicationId, jobId: job.id, status: on ? "pending" : "shortlisted" },
+    data: { status: on ? "shortlisted" : "pending" },
+  });
+  if (count !== 1) return res.status(409).json({ error: "That application can't be changed any more." });
+  return res.json({ ok: true, status: on ? "shortlisted" : "pending" });
+});
+
+/** Decline an applicant: they are told, by notification and email (D21: declined talents are told). */
+router.post("/:id/applications/:applicationId/decline", requireClient, async (req, res) => {
+  const job = await prisma.job.findUnique({ where: { id: req.params.id }, include: { client: true } });
+  if (!job || job.clientId !== req.user.id) return res.status(404).json({ error: "Job not found." });
+  const { count } = await prisma.application.updateMany({
+    where: { id: req.params.applicationId, jobId: job.id, status: { in: ["pending", "shortlisted"] } },
+    data: { status: "declined", declinedAt: new Date() },
+  });
+  if (count !== 1) return res.status(409).json({ error: "That application can't be declined any more." });
+  const app = await prisma.application.findUnique({ where: { id: req.params.applicationId }, include: { talent: true } });
+  discovery.notify(app.talentId, { title: "Update on your application", body: `The client chose not to go ahead with your application for "${job.title}".`, data: { type: "application_declined", jobId: job.id } });
+  const sent = await mailer.sendApplicationDeclined({ to: app.talent.email, name: app.talent.fullName, jobTitle: job.title });
+  console.log(`jobs: declined application=${app.id} job=${job.id} talent=${app.talentId} readBack.status=${(await prisma.application.findUnique({ where: { id: app.id }, select: { status: true } })).status} emailSent=${sent.sent}`);
+  return res.json({ ok: true });
+});
+
+/** Reopen a paused job: the 5 days and the 50 start again. Premium (D21, D39); the paid gate switches on with billing (S8). */
+router.post("/:id/reopen", requireClient, async (req, res) => {
+  const job = await prisma.job.findUnique({ where: { id: req.params.id }, include: { _count: { select: { applications: true } } } });
+  if (!job || job.clientId !== req.user.id) return res.status(404).json({ error: "Job not found." });
+  if (!job.skillKey || job.postStatus !== "live" || job.closedAt || job.awardedApplicationId) return res.status(409).json({ error: "This job can't be reopened.", code: "not_open" });
+  await discovery.attachOpenCounts(prisma, [job]);
+  if (!capState({ applicantCount: job._openCount ?? job._count.applications, openedAt: job.reopenedAt ?? job.liveAt ?? job.createdAt }).paused) return res.status(409).json({ error: "This job is still taking applications.", code: "not_paused" });
+  if (process.env.REOPEN_REQUIRES_PREMIUM === "true") return res.status(402).json({ error: "Reopening a paused job is a premium feature.", code: "premium_required" });
+  // The cap counts applicants, so reopening also lifts it: another 50 may apply from now.
+  await prisma.job.update({ where: { id: job.id }, data: { reopenedAt: new Date() } });
+  return res.json({ ok: true });
+});
+
+/** Invite a talent to a job: up to 20 per job, valid 72 hours (D23). */
+router.post("/:id/invitations", requireClient, async (req, res) => {
+  const result = await discovery.invite({ clientId: req.user.id, jobId: req.params.id, talentId: req.body?.talentId, message: req.body?.message });
+  if (!result.ok) return res.status(result.status).json({ error: result.error, code: result.code });
+  return res.status(201).json({ invitation: { id: result.invitation.id, expiresAt: result.invitation.expiresAt } });
+});
+
+router.get("/:id/invitations", requireClient, async (req, res) => {
+  const job = await prisma.job.findUnique({ where: { id: req.params.id } });
+  if (!job || job.clientId !== req.user.id) return res.status(404).json({ error: "Job not found." });
+  const rows = await prisma.invitation.findMany({ where: { jobId: job.id }, orderBy: { createdAt: "desc" }, include: { talent: { select: { id: true, fullName: true } } } });
+  return res.json({ invitations: rows.map((i) => ({ id: i.id, status: i.status, expiresAt: i.expiresAt, talent: i.talent })), limit: discoveryRules.RULES.invitationsPerJob });
 });
 
 /**
