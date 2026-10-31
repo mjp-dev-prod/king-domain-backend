@@ -461,3 +461,34 @@ describe("the brief form", () => {
     assert.equal((await api(cl, "GET", `/briefs/spec?skill=${SKILL}&type=contest`)).status, 404);
   });
 });
+
+describe("scope=mine", () => {
+  it("returns every job the person posted or applied to, including closed ones, and nothing else", async () => {
+    await reset();
+    const mine = await liveJob({ title: `${h.TITLE_PREFIX}Mine posted` });
+    const closed = await liveJob({ title: `${h.TITLE_PREFIX}Mine closed`, closedAt: new Date() });
+    const applied = await liveJob({ title: `${h.TITLE_PREFIX}Applied to` });
+    await prisma.application.create({ data: { jobId: applied.id, talentId: ctx.talentA.id } });
+    const other = await liveJob({ title: `${h.TITLE_PREFIX}Not mine` });
+    const asClient = (await api(cl, "GET", "/jobs?scope=mine&limit=50")).json.jobs.map((j) => j.id);
+    for (const j of [mine, closed, applied, other]) assert.ok(asClient.includes(j.id), "the client posted all four");
+    const asTalent = (await api(ca, "GET", "/jobs?scope=mine&limit=50")).json.jobs.map((j) => j.id);
+    assert.deepEqual(asTalent, [applied.id]);
+  });
+});
+
+describe("awarded and closed jobs", () => {
+  it("leave the open feed for talents who never applied, and stay for the owner and the applicants", async () => {
+    await reset();
+    const open = await liveJob({ title: `${h.TITLE_PREFIX}Still open` });
+    const filled = await liveJob({ title: `${h.TITLE_PREFIX}Already filled` });
+    const app = await prisma.application.create({ data: { jobId: filled.id, talentId: ctx.talentB.id, status: "selected" } });
+    await prisma.job.update({ where: { id: filled.id }, data: { awardedApplicationId: app.id } });
+    const ids = (tok) => api(tok, "GET", `/jobs?q=${encodeURIComponent(h.TITLE_PREFIX)}&limit=50`).then((r) => r.json.jobs.map((j) => j.id));
+    const forA = await ids(ca);
+    assert.ok(forA.includes(open.id));
+    assert.ok(!forA.includes(filled.id), "filled by someone else");
+    assert.ok((await ids(tc)).includes(filled.id), "the talent who was picked still sees it");
+    assert.ok((await ids(cl)).includes(filled.id), "the owner too");
+  });
+});

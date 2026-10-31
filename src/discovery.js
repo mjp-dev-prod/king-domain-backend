@@ -43,6 +43,8 @@ function feedWhere(viewer, f, now) {
   const visible = {
     postStatus: "live",
     closedAt: null,
+    // A job someone was already picked for is not for other talents any more (it stays visible to its owner and applicants).
+    awardedApplicationId: null,
     OR: [{ visibility: "public" }, { invitations: { some: { talentId: viewer.id, status: { in: ["pending", "accepted"] }, expiresAt: { gt: now } } } }],
   };
   const and = [{ OR: [visible, mine, applied] }];
@@ -56,6 +58,8 @@ function feedWhere(viewer, f, now) {
   if (f.verifiedClient) and.push({ client: { identityVerifiedAt: { not: null } } });
   if (f.q) and.push({ OR: [{ title: { contains: f.q, mode: "insensitive" } }, { description: { contains: f.q, mode: "insensitive" } }] });
   if (f.onlyMine) and.push({ clientId: viewer.id });
+  // scope=mine: every job the person is a party to (posted, or applied to), whatever its state. The Work and My jobs tabs read this.
+  if (f.partyOnly) and.push({ OR: [{ clientId: viewer.id }, { applications: { some: { talentId: viewer.id } } }] });
   return { AND: and };
 }
 
@@ -123,6 +127,7 @@ async function feedJobs(viewer, query, deps = {}) {
     fewApplicants: query.fewApplicants === "true",
     q: typeof query.q === "string" ? query.q.trim().slice(0, 80) : "",
     onlyMine: query.mine === "true",
+    partyOnly: query.scope === "mine",
   };
   const limit = Math.min(PAGE_MAX, Math.max(1, num(query.limit) ?? PAGE_DEFAULT));
   const cursor = decodeCursor(query.cursor);
