@@ -15,6 +15,7 @@ const appRoutes = require("./app/appRoutes");
 const { buildCiUploadRouter } = require("./app/ciUploadRoutes");
 const storage = require("./storage");
 const { startNotificationScheduler } = require("./admin/notifications");
+const skills = require("./skills");
 const { startContractScheduler } = require("./contractLifecycle");
 const { startPushDispatcher } = require("./pushDispatcher");
 const mcpAdmin = require("./mcp-admin/mcp-admin.routes");
