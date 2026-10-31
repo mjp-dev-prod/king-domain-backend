@@ -73,6 +73,12 @@ async function deleteAccount({ userId }, deps = {}) {
         const user = await trx.user.findUnique({ where: { id: userId } });
         const profile = await trx.talentProfile.findUnique({ where: { userId }, include: { proofItems: { select: { filePath: true } } } });
 
+        // Identity documents and videos are the most sensitive thing we hold: rows and files both go.
+        const identityRows = await trx.identityCheck.findMany({ where: { userId }, select: { documentPath: true, videoPath: true } });
+        const identityPaths = identityRows.flatMap((r) => [r.documentPath, r.videoPath]).filter(Boolean);
+        await trx.identityCheck.deleteMany({ where: { userId } });
+        await trx.guardianConsent.deleteMany({ where: { userId } });
+
         const noContract = { contract: { is: null } };
         const counts = {};
         counts.sessions = (await trx.userSession.deleteMany({ where: { userId } })).count;
@@ -99,12 +105,24 @@ async function deleteAccount({ userId }, deps = {}) {
             passwordResetCodeHash: null,
             passwordResetCodeExpiresAt: null,
             passwordResetAttempts: 0,
+            country: null,
+            state: null,
+            city: null,
+            educationKind: null,
+            educationSchool: null,
+            educationDetail: null,
+            clientKind: null,
+            legalName: null,
+            dateOfBirth: null,
+            identityVerifiedAt: null,
+            guardianConfirmedAt: null,
           },
         });
 
         return {
           email: user.email,
           photoPath: user.photoPath,
+          identityPaths,
           proofPaths: (profile?.proofItems ?? []).map((p) => p.filePath).filter(Boolean),
           recipientCode: profile?.paystackRecipientCode ?? null,
           counts,
@@ -130,6 +148,7 @@ async function deleteAccount({ userId }, deps = {}) {
     }
   };
   if (removed.proofPaths.length) await attempt("files", () => storage.removePrivateFiles("proof-items", removed.proofPaths));
+  if (removed.identityPaths.length) await attempt("files", () => storage.removePrivateFiles("identity-docs", removed.identityPaths));
   if (removed.photoPath) await attempt("files", () => storage.removeAvatar(removed.photoPath));
   if (removed.recipientCode) {
     if (paystack.configured) await attempt("paystack", () => paystack.deleteTransferRecipient(removed.recipientCode));

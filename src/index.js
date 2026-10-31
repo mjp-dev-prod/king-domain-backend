@@ -12,6 +12,8 @@ const adminDecisions = require("./admin/decisionRoutes");
 const adminAppReleases = require("./admin/appReleaseRoutes");
 const adminProofReview = require("./admin/proofReviewRoutes");
 const adminOps = require("./admin/opsRoutes");
+const adminIdentity = require("./admin/identityReviewRoutes");
+const userIdentity = require("./user/identityRoutes");
 const { startOpsScheduler } = require("./alerts");
 const appRoutes = require("./app/appRoutes");
 const { buildCiUploadRouter } = require("./app/ciUploadRoutes");
@@ -107,12 +109,15 @@ app.get("/skills", (req, res) => {
 });
 
 app.use("/users", user.router);
+app.use("/users", userIdentity.router);
+app.use("/guardian", userIdentity.guardianRouter);
 app.use("/jobs", userJobs.router);
 app.use("/admin", admin.router);
 app.use("/admin/waitlist", adminWaitlist.router);
 app.use("/admin/decisions", adminDecisions.router);
 app.use("/admin/app-releases", adminAppReleases.router);
 app.use("/admin/proof-items", adminProofReview.router);
+app.use("/admin/identity-checks", adminIdentity.router);
 app.use("/admin", adminOps.router);
 app.use("/app", appRoutes.router);
 app.use("/app", buildCiUploadRouter({ prisma, storage }));

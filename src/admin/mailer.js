@@ -449,7 +449,47 @@ function sendOpsAlert({ to, title, body, link }) {
   });
 }
 
+function sendGuardianRequest({ to, guardianName, youngPersonName, link, hours }) {
+  return send({
+    to,
+    subject: `${youngPersonName} asked for your consent on King Domain`,
+    html: `
+      <p>Hello ${escapeHtml(guardianName)},</p>
+      <p><strong>${escapeHtml(youngPersonName)}</strong> wants to take paid freelance work on King Domain and named you as their parent or guardian.</p>
+      <p>Please read and confirm here (the link works for ${hours} hours): <a href="${escapeHtml(link)}">Review and confirm</a></p>
+      <p>Any payment goes into a bank account in their own name. If you didn't expect this, ignore this email and nothing happens.</p>
+    `,
+    fallbackContext: `guardian request for ${youngPersonName} to ${to}: ${link}`,
+  });
+}
+
+function sendIdentityVerified({ to, name }) {
+  return send({
+    to,
+    subject: "You're verified on King Domain",
+    html: `<p>Hi ${escapeHtml(name)},</p><p>Your identity check passed. You can now apply for and be paid for work.</p>`,
+    fallbackContext: `identity verified for ${to}`,
+  });
+}
+
+function sendIdentityNotYet({ to, name, reasonLabel, note }) {
+  return send({
+    to,
+    subject: "Your identity check needs another go",
+    html: `
+      <p>Hi ${escapeHtml(name)},</p>
+      <p>We couldn't verify you yet: <strong>${escapeHtml(reasonLabel)}</strong>.</p>
+      ${note ? `<p>${escapeHtml(note)}</p>` : ""}
+      <p>Open the King Domain app, go to Verify your identity, and send it again. Nothing you sent earlier is lost.</p>
+    `,
+    fallbackContext: `identity not yet for ${to}: ${reasonLabel}`,
+  });
+}
+
 module.exports = {
+  sendGuardianRequest,
+  sendIdentityVerified,
+  sendIdentityNotYet,
   sendOpsAlert,
   isReservedRecipient,
   sendAccountDeleted,

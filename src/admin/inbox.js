@@ -40,6 +40,27 @@ const QUEUES = [
       return rows.map((r) => r.reviewedAt.getTime() - r.createdAt.getTime());
     },
   },
+  {
+    key: "identity",
+    label: "Identity checks",
+    capability: "checker",
+    path: "/identity-checks",
+    defaultTargetMinutes: 48 * 60,
+    defaultWhenLate: "The person can still browse; paid actions wait until they are checked.",
+    async openSince(db) {
+      const rows = await db.identityCheck.findMany({ where: { status: "pending" }, select: { createdAt: true } });
+      return rows.map((r) => r.createdAt);
+    },
+    async resolvedDurationsMs(db) {
+      const rows = await db.identityCheck.findMany({
+        where: { status: { not: "pending" }, reviewedAt: { not: null } },
+        select: { createdAt: true, reviewedAt: true },
+        orderBy: { reviewedAt: "desc" },
+        take: RESOLVED_SAMPLE,
+      });
+      return rows.map((r) => r.reviewedAt.getTime() - r.createdAt.getTime());
+    },
+  },
 ];
 
 async function targetFor(db, queue) {

@@ -16,7 +16,18 @@ const TYPES = {
   pdf: { contentType: "application/pdf", extension: "pdf" },
   heic: { contentType: "image/heic", extension: "heic" },
   heif: { contentType: "image/heif", extension: "heif" },
+  // Short videos (identity selfie). Never accepted unless a route asks for them by name in `allow`.
+  mp4: { contentType: "video/mp4", extension: "mp4" },
+  mov: { contentType: "video/quicktime", extension: "mov" },
+  webm: { contentType: "video/webm", extension: "webm" },
 };
+
+/** What a route accepts when it names nothing: pictures and PDFs, as before videos existed. */
+const DEFAULT_ALLOW = ["png", "jpeg", "gif", "webp", "pdf", "heic", "heif"];
+const VIDEO_ALLOW = ["mp4", "mov", "webm"];
+const IMAGE_ALLOW = ["png", "jpeg", "webp", "heic", "heif"];
+
+const MP4_BRANDS = ["isom", "iso2", "mp41", "mp42", "avc1", "M4V ", "dash"];
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const HEIC_BRANDS = ["heic", "heix", "hevc", "hevx"];
@@ -33,7 +44,11 @@ function sniffKey(buffer) {
   if (buffer.length >= 12 && at(4, 8) === "ftyp") {
     if (HEIC_BRANDS.includes(at(8, 12))) return "heic";
     if (HEIF_BRANDS.includes(at(8, 12))) return "heif";
+    if (MP4_BRANDS.includes(at(8, 12))) return "mp4";
+    if (at(8, 12) === "qt  ") return "mov";
   }
+  // Matroska / WebM: the EBML header.
+  if (buffer.length >= 4 && buffer[0] === 0x1a && buffer[1] === 0x45 && buffer[2] === 0xdf && buffer[3] === 0xa3) return "webm";
   return null;
 }
 
@@ -60,7 +75,7 @@ function inspectUpload({ buffer, originalName, allow, unsupportedMessage }) {
   }
   // [allow] narrows the accepted types for one route (a profile photo is only JPG, PNG or WebP).
   const key = sniffKey(buffer);
-  const type = key && (!allow || allow.includes(key)) ? TYPES[key] : null;
+  const type = key && (allow ?? DEFAULT_ALLOW).includes(key) ? TYPES[key] : null;
   if (!type) {
     return {
       ok: false,
@@ -120,4 +135,38 @@ const checkPhoto = checkUploadOf({
   unsupportedMessage: "That file type isn't supported. Choose a JPG, PNG or WebP picture.",
 });
 
-module.exports = { MAX_UPLOAD_BYTES, PHOTO_MAX_BYTES, inspectUpload, singleFile, checkUpload, checkPhoto };
+/**
+ * Identity submissions: a document photo (10 MB) and a short live video (25 MB), in one request.
+ * Each is checked by its own bytes in the route with IMAGE_ALLOW and VIDEO_ALLOW.
+ */
+const IDENTITY_VIDEO_MAX_BYTES = 25 * 1024 * 1024;
+function identityFiles() {
+  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: IDENTITY_VIDEO_MAX_BYTES, files: 2 } }).fields([
+    { name: "document", maxCount: 1 },
+    { name: "video", maxCount: 1 },
+  ]);
+  return (req, res, next) =>
+    upload(req, res, (err) => {
+      if (!err) return next();
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({ error: "That file is too large. Photos can be up to 10 MB and the video up to 25 MB.", code: "file_too_large" });
+      }
+      if (err.code === "LIMIT_FILE_COUNT" || err.code === "LIMIT_UNEXPECTED_FILE") {
+        return res.status(400).json({ error: "Send one document photo and one video.", code: "too_many_files" });
+      }
+      return next(err);
+    });
+}
+
+module.exports = {
+  MAX_UPLOAD_BYTES,
+  PHOTO_MAX_BYTES,
+  IDENTITY_VIDEO_MAX_BYTES,
+  IMAGE_ALLOW,
+  VIDEO_ALLOW,
+  inspectUpload,
+  singleFile,
+  identityFiles,
+  checkUpload,
+  checkPhoto,
+};

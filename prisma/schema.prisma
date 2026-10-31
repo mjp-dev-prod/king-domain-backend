@@ -323,6 +323,28 @@ model User {
   passwordResetCodeHash      String?
   passwordResetCodeExpiresAt DateTime?
   passwordResetAttempts      Int       @default(0)
+
+  // ── S1: region, education line, identity (PRD §3.1, §4.4; decisions D10 to D15) ──
+  /// "Nigeria" or the country, with state and city for Nigeria. Clients and talents filter by it (D23).
+  country        String?
+  state          String?
+  city           String?
+  /// Student / Graduate / Trained / Self-taught (D15): describes the person, never gates them.
+  educationKind  EducationKind?
+  educationSchool String?
+  /// Session for a student ("2026/27"), year for a graduate ("2027"), course for trained.
+  educationDetail String?
+  /// Clients only: an individual or a business (checked through CAC).
+  clientKind     ClientKind?
+  /// What the identity check found (the name on the document), kept so payout names can be matched.
+  legalName      String?
+  dateOfBirth    DateTime? @db.Date
+  identityVerifiedAt DateTime?
+  /// An under-18 needs a guardian's confirmation (NDPA s.31; D12).
+  guardianConfirmedAt DateTime?
+  identityChecks   IdentityCheck[]
+  guardianConsents GuardianConsent[]
+
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
@@ -751,4 +773,79 @@ model OpsAlert {
   @@index([severity, digestedAt])
   @@index([queueKey, createdAt])
   @@map("ops_alerts")
+}
+
+// ── S1: identity (PRD §4.4) ───────────────────────────────
+
+enum EducationKind {
+  student
+  graduate
+  trained
+  selfTaught
+}
+
+enum ClientKind {
+  individual
+  business
+}
+
+/// What the person shows: a NIN slip, a passport (international), or a CAC certificate (business).
+enum IdentityDocument {
+  ninSlip
+  passport
+  cac
+}
+
+enum IdentityCheckStatus {
+  pending
+  verified
+  notYet
+}
+
+/// One identity submission. Until a licensed provider is live (CAC), a checker reads the document and
+/// the short live video by hand (decision D47); the same row records the provider's answer later.
+model IdentityCheck {
+  id         String              @id @default(uuid())
+  userId     String
+  user       User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  document   IdentityDocument
+  /// Path of the document photo in the private `identity-docs` bucket.
+  documentPath String
+  /// Path of the short live selfie video. Optional for a business (CAC) check.
+  videoPath  String?
+  /// What the person typed (so the checker compares it with the document).
+  claimedName String
+  claimedDateOfBirth DateTime? @db.Date
+  status     IdentityCheckStatus @default(pending)
+  /// Set by the checker on approval: the name and date of birth as the document shows them.
+  legalName  String?
+  dateOfBirth DateTime?          @db.Date
+  reasonCode String?
+  note       String?
+  reviewedById String?
+  reviewedAt DateTime?
+  createdAt  DateTime            @default(now())
+
+  @@index([status, createdAt])
+  @@index([userId, createdAt])
+  @@map("identity_checks")
+}
+
+/// A guardian confirming, on their own phone, that an under-18 may work (NDPA s.31; D12). The person
+/// is paid into their own account regardless.
+model GuardianConsent {
+  id            String    @id @default(uuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  guardianName  String
+  guardianEmail String
+  relationship  String
+  /// SHA-256 of the confirmation token in the emailed link.
+  tokenHash     String    @unique
+  expiresAt     DateTime
+  confirmedAt   DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([userId])
+  @@map("guardian_consents")
 }

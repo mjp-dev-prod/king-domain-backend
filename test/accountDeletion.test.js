@@ -416,3 +416,31 @@ describe("scripts/delete-user.js (a request that arrived by email)", () => {
     assert.equal((await fresh(solo)).fullName, "Deleted user");
   });
 });
+
+describe("DELETE /users/me: identity data", () => {
+  it("identity documents, videos and the guardian record go with the account, and the personal fields are cleared", async () => {
+    const talent = await person("talent");
+    const id = talent.user.id;
+    const docPath = `${id}/1-slip.png`;
+    const videoPath = `${id}/2-me.mp4`;
+    storage.objects.set(`identity-docs/${docPath}`, { buffer: Buffer.from("x"), contentType: "image/png" });
+    storage.objects.set(`identity-docs/${videoPath}`, { buffer: Buffer.from("x"), contentType: "video/mp4" });
+    await prisma.identityCheck.create({ data: { userId: id, document: "ninSlip", documentPath: docPath, videoPath, claimedName: "Test Person" } });
+    await prisma.guardianConsent.create({ data: { userId: id, guardianName: "Ada Obi", guardianEmail: "ada@example.com", relationship: "parent", tokenHash: uniq(), expiresAt: new Date(Date.now() + 60_000) } });
+    await prisma.user.update({
+      where: { id },
+      data: { legalName: "Test Person", dateOfBirth: new Date("2000-01-01"), identityVerifiedAt: new Date(), guardianConfirmedAt: new Date(), country: "Nigeria", state: "Lagos", city: "Yaba", educationKind: "student", educationSchool: "UNILAG", educationDetail: "2026/27" },
+    });
+
+    const r = await del(talent);
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+
+    assert.equal(await prisma.identityCheck.count({ where: { userId: id } }), 0);
+    assert.equal(await prisma.guardianConsent.count({ where: { userId: id } }), 0);
+    assert.deepEqual([...storage.objects.keys()].filter((k) => k.startsWith("identity-docs/")), [], "the files are gone from storage");
+    const u = await fresh(talent);
+    for (const f of ["legalName", "dateOfBirth", "identityVerifiedAt", "guardianConfirmedAt", "country", "state", "city", "educationKind", "educationSchool", "educationDetail"]) {
+      assert.equal(u[f], null, `${f} cleared`);
+    }
+  });
+});

@@ -86,6 +86,14 @@ function serveFakeProvider(provider) {
         provider.deletedRecipients.push(decodeURIComponent(recipient[1]));
         return send(200, { status: true, message: "Transfer recipient set as inactive" });
       }
+      // Bank lookups for the payout-account routes. `provider.accountName` is who the account belongs to.
+      if (url.pathname === "/bank/resolve") {
+        return send(200, { status: true, data: { account_number: url.searchParams.get("account_number"), account_name: provider.accountName ?? "Suite Talent" } });
+      }
+      if (url.pathname === "/bank") return send(200, { status: true, data: [{ name: "Test Bank", code: "058" }] });
+      if (req.method === "POST" && url.pathname === "/transferrecipient") {
+        return send(200, { status: true, data: { recipient_code: `RCP_${body.account_number}` } });
+      }
       const verify = url.pathname.match(/^\/transaction\/verify\/(.+)$/);
       if (verify) {
         const ref = decodeURIComponent(verify[1]);

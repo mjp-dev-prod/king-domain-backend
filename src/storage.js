@@ -247,7 +247,43 @@ async function removeAvatar(path) {
   if (error) throw new Error(`Supabase remove failed: ${error.message}`);
 }
 
+// ── Identity documents and selfie videos: a PRIVATE bucket (PRD §4.4) ──
+// Opened only inside a review, through links that expire in minutes. Created the first time it is
+// needed, the same way the avatars bucket is, so a fresh environment needs no manual step.
+const IDENTITY_BUCKET = "identity-docs";
+
+async function ensureIdentityBucket() {
+  const { error } = await supabase.storage.createBucket(IDENTITY_BUCKET, { public: false });
+  if (error && !/already exists|duplicate/i.test(error.message)) {
+    throw new Error(`Supabase bucket create failed: ${error.message}`);
+  }
+}
+
+/** Stores an identity file and returns its path (`<userId>/<timestamp>-<name>`). */
+async function uploadIdentityFile({ userId, buffer, originalName, contentType }) {
+  if (!supabase) {
+    throw new Error("Supabase Storage is not configured — set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.");
+  }
+  const safeName = (originalName || "upload").replace(/[^a-zA-Z0-9._-]/g, "_");
+  const path = `${userId}/${Date.now()}-${crypto.randomBytes(3).toString("hex")}-${safeName}`;
+  const put = () => supabase.storage.from(IDENTITY_BUCKET).upload(path, buffer, { contentType, upsert: false });
+  let { error } = await put();
+  if (error && /bucket not found/i.test(error.message)) {
+    await ensureIdentityBucket();
+    ({ error } = await put());
+  }
+  if (error) throw new Error(`Supabase upload failed: ${error.message}`);
+  return path;
+}
+
+function getIdentityFileSignedUrl(path, expiresInSeconds = 300) {
+  return getPrivateFileSignedUrl(IDENTITY_BUCKET, path, expiresInSeconds);
+}
+
 module.exports = {
+  IDENTITY_BUCKET,
+  uploadIdentityFile,
+  getIdentityFileSignedUrl,
   uploadAvatar,
   removeAvatar,
   removePrivateFiles,

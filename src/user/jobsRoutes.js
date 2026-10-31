@@ -11,6 +11,7 @@ const mailer = require("../admin/mailer");
 const changes = require("../contractChanges");
 const extensions = require("../contractExtensions");
 const jobsService = require("../jobs");
+const { requireVerifiedIdentity } = require("./identityGate");
 
 const router = express.Router();
 router.use(requireUser);
@@ -181,7 +182,7 @@ router.get("/:id", async (req, res) => {
   return res.json({ job: await serializeJob(job, job.applications) });
 });
 
-router.post("/", requireClient, async (req, res) => {
+router.post("/", requireClient, requireVerifiedIdentity(), async (req, res) => {
   const result = await jobsService.postJob({ clientId: req.user.id, input: req.body });
   if (!result.ok) return res.status(result.status).json({ error: result.error, code: result.code });
 
@@ -216,7 +217,7 @@ router.post("/:id/close", requireClient, async (req, res) => {
  * could apply to a job in an unverified category, which is exactly the
  * anti-spam rule Milestone 03 exists to enforce.
  */
-router.post("/:id/apply", requireTalentProfile, async (req, res) => {
+router.post("/:id/apply", requireTalentProfile, requireVerifiedIdentity(), async (req, res) => {
   const job = await prisma.job.findUnique({ where: { id: req.params.id } });
   if (!job) return res.status(404).json({ error: "Job not found." });
 
@@ -273,7 +274,7 @@ router.get("/:id/applications", requireClient, async (req, res) => {
  * platform fee is computed and frozen onto the contract right here, at
  * the budget that was true at award time.
  */
-router.post("/:id/applications/:applicationId/award", requireClient, async (req, res) => {
+router.post("/:id/applications/:applicationId/award", requireClient, requireVerifiedIdentity(), async (req, res) => {
   const result = await jobsService.awardJob({ jobId: req.params.id, clientId: req.user.id, applicationId: req.params.applicationId });
   if (!result.ok) return res.status(result.status).json({ error: result.error, code: result.code });
   return res.status(201).json({ contract: await serializeContract(result.contract) });

@@ -10,8 +10,11 @@ const accounts = require("../accounts");
 const push = require("../push");
 const auth = require("./auth");
 const jwtUtil = require("./jwt");
+const identity = require("../identity");
 
 const router = express.Router();
+
+const NAME_MISMATCH = "The account name doesn't match the name on your verified ID. Payouts only go to an account in your own name.";
 
 // Uploads: one optional file, 10 MB, checked by its own bytes (src/uploads.js).
 
@@ -88,6 +91,10 @@ function publicUser(user) {
     // The permanent public link (profile photos are visible to everyone), or null.
     photoUrl: avatarPublicUrl(user.photoPath),
     emailVerified: user.emailVerified,
+    region: user.country ? { country: user.country, state: user.state, city: user.city } : null,
+    education: user.educationKind ? { kind: user.educationKind, school: user.educationSchool, detail: user.educationDetail } : null,
+    clientKind: user.clientKind ?? null,
+    identityVerified: Boolean(user.identityVerifiedAt),
     createdAt: user.createdAt,
   };
 }
@@ -653,7 +660,9 @@ router.post(
 
     try {
       const resolved = await paystack.resolveAccountNumber({ accountNumber: accountNumber.trim(), bankCode: bankCode.trim() });
-      return res.json({ accountName: resolved.accountName });
+      // null until the person is verified: there is no name to compare with yet.
+      const legalName = req.user.legalName;
+      return res.json({ accountName: resolved.accountName, matchesVerifiedName: legalName ? identity.namesMatch(legalName, resolved.accountName) : null });
     } catch (err) {
       return res.status(400).json({ error: err.message || "Could not verify that account number." });
     }
@@ -686,6 +695,12 @@ router.post(
       resolved = await paystack.resolveAccountNumber({ accountNumber: accountNumber.trim(), bankCode: bankCode.trim() });
     } catch (err) {
       return res.status(400).json({ error: err.message || "Could not verify that account number." });
+    }
+
+    // Money only goes to the person who did the work (PRD §4.4): once verified, the account must be theirs.
+    if (req.user.legalName && !identity.namesMatch(req.user.legalName, resolved.accountName)) {
+      console.log(`bank-account: refused user=${req.user.id} verifiedName="${req.user.legalName}" accountName="${resolved.accountName}"`);
+      return res.status(422).json({ error: NAME_MISMATCH, code: "name_mismatch" });
     }
 
     const banks = await paystack.listBanks().catch(() => []);
