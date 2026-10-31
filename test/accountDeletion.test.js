@@ -444,3 +444,36 @@ describe("DELETE /users/me: identity data", () => {
     }
   });
 });
+
+describe("DELETE /users/me: skill submissions", () => {
+  it("the submission rows, restrictions and the files in the private bucket go with the account", async () => {
+    const r2 = await h.serveFakeR2();
+    const withR2 = await h.startServer({
+      port: 4618,
+      paystackUrl: fakePaystack.url,
+      autoRelease: false,
+      storageUrl: storage.url,
+      env: { R2_ACCOUNT_ID: "test", R2_ACCESS_KEY_ID: "test", R2_SECRET_ACCESS_KEY: "test", R2_PRIVATE_BUCKET: "private-test", R2_ENDPOINT: r2.url },
+    });
+    try {
+      const talent = await person("talent");
+      const id = talent.user.id;
+      const key = `submissions/${id}/s1/clip.mp4`;
+      r2.objects.set(`private-test/${key}`, { buffer: Buffer.from("x"), contentType: "video/mp4", etag: "e" });
+      const s = await prisma.skillSubmission.create({ data: { userId: id, skillKey: "short-form-video", status: "review" } });
+      await prisma.submissionFile.create({ data: { submissionId: s.id, role: "walkthrough", name: "clip.mp4", contentType: "video/mp4", sizeBytes: 1, objectKey: key, status: "ready", etag: "e" } });
+      await prisma.skillRestriction.create({ data: { userId: id, skillKey: "short-form-video", kind: "repeat", until: new Date(Date.now() + 86_400_000), reason: "test" } });
+
+      const res = await h.call(withR2.base, talent.token, "DELETE", "/users/me", { password: PASSWORD });
+      assert.equal(res.status, 200, JSON.stringify(res.json));
+
+      assert.equal(await prisma.skillSubmission.count({ where: { userId: id } }), 0);
+      assert.equal(await prisma.submissionFile.count({ where: { objectKey: key } }), 0);
+      assert.equal(await prisma.skillRestriction.count({ where: { userId: id } }), 0);
+      assert.equal(r2.objects.size, 0, "the file is gone from the private bucket");
+    } finally {
+      withR2.stop();
+      r2.server.close();
+    }
+  });
+});

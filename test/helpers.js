@@ -184,6 +184,54 @@ function serveFakeStorage() {
   );
 }
 
+/**
+ * A private R2 / S3 stand-in, path-style (/bucket/key), speaking what the SDK really sends for the calls
+ * src/storage.js makes: a presigned PUT and GET (refused unless the link carries a signature, as the real
+ * service refuses an unsigned one), HEAD, and DeleteObjects (POST /bucket?delete with an XML body).
+ * `objects` maps "bucket/key" to { buffer, contentType, etag } so a test sees exactly what was stored.
+ */
+function serveFakeR2() {
+  const objects = new Map();
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      const body = Buffer.concat(chunks);
+      const url = new URL(req.url, "http://x");
+      const key = decodeURIComponent(url.pathname).slice(1);
+      const signed = url.searchParams.has("X-Amz-Signature") || Boolean(req.headers.authorization);
+      const xml = (code, text) => {
+        res.writeHead(code, { "Content-Type": "application/xml" });
+        res.end(text);
+      };
+      if (!signed) return xml(403, "<Error><Code>AccessDenied</Code></Error>");
+      if (req.method === "PUT") {
+        const etag = crypto.createHash("md5").update(body).digest("hex");
+        objects.set(key, { buffer: body, contentType: req.headers["content-type"], etag });
+        res.writeHead(200, { ETag: `"${etag}"` });
+        return res.end();
+      }
+      if (req.method === "HEAD" || req.method === "GET") {
+        const o = objects.get(key);
+        if (!o) {
+          res.writeHead(404);
+          return res.end();
+        }
+        res.writeHead(200, { "Content-Type": o.contentType, "Content-Length": o.buffer.length, ETag: `"${o.etag}"` });
+        return res.end(req.method === "HEAD" ? undefined : o.buffer);
+      }
+      if (req.method === "POST" && url.searchParams.has("delete")) {
+        const bucket = key.endsWith("/") ? key.slice(0, -1) : key;
+        const deleted = [...body.toString().matchAll(new RegExp("<Key>([^<]+)</Key>", "g"))].map((m) => m[1].replace(/&amp;/g, "&"));
+        for (const k of deleted) objects.delete(`${bucket}/${k}`);
+        return xml(200, `<DeleteResult>${deleted.map((k) => `<Deleted><Key>${k}</Key></Deleted>`).join("")}</DeleteResult>`);
+      }
+      xml(404, "<Error><Code>NoSuchKey</Code></Error>");
+    });
+  });
+  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({ server, url: `http://127.0.0.1:${server.address().port}`, objects })));
+}
+
 /** Records every email the code tries to send, whatever the template. */
 /**
  * A prisma client whose `model.method` holds its first `n` callers until all
@@ -352,6 +400,8 @@ async function startServer({ port, paystackUrl, autoRelease = true, storageUrl, 
       // Off unless the test hands it a fake (serveFakeStorage).
       SUPABASE_URL: storageUrl ?? "",
       SUPABASE_SERVICE_ROLE_KEY: storageUrl ? "test-service-role-key" : "",
+      R2_PRIVATE_BUCKET: "", // and never touches the real private R2 bucket unless a test passes a fake (env)
+      R2_ENDPOINT: "",
       OPS_SCHEDULER: "off", // a test server never sweeps or sends a digest on its own
       OPS_SLACK_WEBHOOK_URL: "", // and never posts to the real Slack unless a test passes a fake
       ...env,
@@ -385,4 +435,4 @@ const call = async (base, tok, method, p, body) => {
   return { status: r.status, json: await r.json().catch(() => null) };
 };
 
-module.exports = { serveFakeSlack, ensureAdmin, adminTokenFor, prisma, CATEGORY, TITLE_PREFIX, past, future, fakeProvider, serveFakeProvider, scopedPrisma, barrierPrisma, spyMailer, serveFakeStorage, ensureUser, fixtures, seedAward, seedWorking, seedSubmitted, DAY_MS, tokenFor, startServer, call };
+module.exports = { serveFakeSlack, ensureAdmin, adminTokenFor, prisma, CATEGORY, TITLE_PREFIX, past, future, fakeProvider, serveFakeProvider, scopedPrisma, barrierPrisma, spyMailer, serveFakeStorage, serveFakeR2, ensureUser, fixtures, seedAward, seedWorking, seedSubmitted, DAY_MS, tokenFor, startServer, call };

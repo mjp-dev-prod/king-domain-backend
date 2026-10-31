@@ -486,7 +486,52 @@ function sendIdentityNotYet({ to, name, reasonLabel, note }) {
   });
 }
 
+function sendSkillVerified({ to, name, skillLabel }) {
+  return send({
+    to,
+    subject: `You're verified in ${skillLabel}`,
+    html: `<p>Hi ${escapeHtml(name)},</p><p>Two reviewers looked at your work and agreed: you're <strong>verified in ${escapeHtml(skillLabel)}</strong>. You can now apply for ${escapeHtml(skillLabel)} jobs.</p>`,
+    fallbackContext: `skill verified for ${to}: ${skillLabel}`,
+  });
+}
+
+/** Not yet, with the lines that fell short and the reviewers' own words. Never who they were. */
+function sendSkillNotYet({ to, name, skillLabel, lines = [], comments = [] }) {
+  const list = lines.map((l) => `<li><strong>${escapeHtml(l.label)}</strong>: ${escapeHtml(l.looksLike)}</li>`).join("");
+  const said = comments.map((c) => `<p>“${escapeHtml(c)}”</p>`).join("");
+  return send({
+    to,
+    subject: `${skillLabel}: not yet`,
+    html: `
+      <p>Hi ${escapeHtml(name)},</p>
+      <p>Your ${escapeHtml(skillLabel)} work didn't pass this time. It isn't a no for good: fix what is listed and send it again.</p>
+      ${list ? `<p>What fell short:</p><ul>${list}</ul>` : ""}
+      ${said ? `<p>What the reviewers said:</p>${said}` : ""}
+      <p>Sending the same files again without changing them breaks the terms and means time off from submitting.</p>
+    `,
+    fallbackContext: `skill not yet for ${to}: ${skillLabel}`,
+  });
+}
+
+/** The authenticity check did not pass: stopped (fix and resend), restricted for a period, or banned. */
+function sendSkillAuthenticity({ to, name, skillLabel, outcome, note, until }) {
+  const lead = {
+    stopped: "We couldn't confirm the work is yours yet, so it wasn't sent to reviewers.",
+    restricted: `You sent work again that had already been turned down, without changing it. You can't submit in ${skillLabel} until ${until ? formatWAT(until) : "further notice"}.`,
+    banned: `We found the work wasn't yours. You can't submit in ${skillLabel} any more.`,
+  }[outcome];
+  return send({
+    to,
+    subject: `${skillLabel}: your submission`,
+    html: `<p>Hi ${escapeHtml(name)},</p><p>${escapeHtml(lead)}</p>${note ? `<p>${escapeHtml(note)}</p>` : ""}<p>The full detail is in the King Domain app, under Skills.</p>`,
+    fallbackContext: `skill authenticity ${outcome} for ${to}: ${skillLabel}`,
+  });
+}
+
 module.exports = {
+  sendSkillVerified,
+  sendSkillNotYet,
+  sendSkillAuthenticity,
   sendGuardianRequest,
   sendIdentityVerified,
   sendIdentityNotYet,

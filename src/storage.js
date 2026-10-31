@@ -258,6 +258,9 @@ const r2Private = privateUploadsConfigured
       region: "auto",
       endpoint: process.env.R2_ENDPOINT || `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
       forcePathStyle: Boolean(process.env.R2_ENDPOINT),
+      // Without this the SDK bakes the CRC32 of an EMPTY body into a presigned PUT link, so the phone's real upload
+      // would fail the checksum. (Seen in the link itself: x-amz-checksum-crc32=AAAAAA==.)
+      requestChecksumCalculation: "WHEN_REQUIRED",
       credentials: { accessKeyId: process.env.R2_ACCESS_KEY_ID, secretAccessKey: process.env.R2_SECRET_ACCESS_KEY },
     })
   : null;

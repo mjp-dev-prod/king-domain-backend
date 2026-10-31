@@ -79,6 +79,11 @@ async function deleteAccount({ userId }, deps = {}) {
         await trx.identityCheck.deleteMany({ where: { userId } });
         await trx.guardianConsent.deleteMany({ where: { userId } });
 
+        // Skill submissions: the files in the private bucket go with the rows (reviews, pieces and file rows cascade).
+        const submissionKeys = (await trx.submissionFile.findMany({ where: { submission: { userId } }, select: { objectKey: true } })).map((f) => f.objectKey);
+        await trx.skillSubmission.deleteMany({ where: { userId } });
+        await trx.skillRestriction.deleteMany({ where: { userId } });
+
         const noContract = { contract: { is: null } };
         const counts = {};
         counts.sessions = (await trx.userSession.deleteMany({ where: { userId } })).count;
@@ -123,6 +128,7 @@ async function deleteAccount({ userId }, deps = {}) {
           email: user.email,
           photoPath: user.photoPath,
           identityPaths,
+          submissionKeys,
           proofPaths: (profile?.proofItems ?? []).map((p) => p.filePath).filter(Boolean),
           recipientCode: profile?.paystackRecipientCode ?? null,
           counts,
@@ -149,6 +155,13 @@ async function deleteAccount({ userId }, deps = {}) {
   };
   if (removed.proofPaths.length) await attempt("files", () => storage.removePrivateFiles("proof-items", removed.proofPaths));
   if (removed.identityPaths.length) await attempt("files", () => storage.removePrivateFiles("identity-docs", removed.identityPaths));
+  if (removed.submissionKeys.length) {
+    if (storage.privateUploadsConfigured) await attempt("files", () => storage.deletePrivateObjects(removed.submissionKeys));
+    else {
+      leftovers.add("files");
+      log(userId, `${removed.submissionKeys.length} submission file(s) not deleted: the private bucket is not configured here`);
+    }
+  }
   if (removed.photoPath) await attempt("files", () => storage.removeAvatar(removed.photoPath));
   if (removed.recipientCode) {
     if (paystack.configured) await attempt("paystack", () => paystack.deleteTransferRecipient(removed.recipientCode));

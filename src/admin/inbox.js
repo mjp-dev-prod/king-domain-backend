@@ -61,6 +61,48 @@ const QUEUES = [
       return rows.map((r) => r.reviewedAt.getTime() - r.createdAt.getTime());
     },
   },
+  {
+    key: "authenticity",
+    label: "Authenticity checks",
+    capability: "checker",
+    path: "/authenticity",
+    defaultTargetMinutes: 24 * 60,
+    defaultWhenLate: "The talent sees their submission is waiting for the first check.",
+    async openSince(db) {
+      const rows = await db.skillSubmission.findMany({ where: { status: "authenticity" }, select: { submittedAt: true } });
+      return rows.map((r) => r.submittedAt);
+    },
+    async resolvedDurationsMs(db) {
+      const rows = await db.skillSubmission.findMany({
+        where: { authenticityAt: { not: null }, submittedAt: { not: null } },
+        select: { submittedAt: true, authenticityAt: true },
+        orderBy: { authenticityAt: "desc" },
+        take: RESOLVED_SAMPLE,
+      });
+      return rows.map((r) => r.authenticityAt.getTime() - r.submittedAt.getTime());
+    },
+  },
+  {
+    key: "skill-review",
+    label: "Skill reviews",
+    capability: "reviewer",
+    path: "/skill-reviews",
+    defaultTargetMinutes: 72 * 60,
+    defaultWhenLate: "The talent sees it is still with the reviewers, with the expected date.",
+    async openSince(db) {
+      const rows = await db.skillSubmission.findMany({ where: { status: "review" }, select: { authenticityAt: true } });
+      return rows.map((r) => r.authenticityAt);
+    },
+    async resolvedDurationsMs(db) {
+      const rows = await db.skillSubmission.findMany({
+        where: { status: { in: ["verified", "notYet"] }, decidedAt: { not: null }, authenticityAt: { not: null } },
+        select: { authenticityAt: true, decidedAt: true },
+        orderBy: { decidedAt: "desc" },
+        take: RESOLVED_SAMPLE,
+      });
+      return rows.map((r) => r.decidedAt.getTime() - r.authenticityAt.getTime());
+    },
+  },
 ];
 
 async function targetFor(db, queue) {
