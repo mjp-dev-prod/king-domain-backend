@@ -153,6 +153,23 @@ const QUEUES = [
       return rows.map((r) => r.handledAt.getTime() - r.createdAt.getTime());
     },
   },
+  {
+    key: "start-proof",
+    label: "Start proof objections",
+    capability: "disputes",
+    path: "/start-proofs",
+    // The talent is waiting on this to be paid the first 20%, so it is a same-day queue.
+    defaultTargetMinutes: 12 * 60,
+    defaultWhenLate: "The 20% stays unpaid and the talent can't deliver until a person rules on the objection.",
+    async openSince(db) {
+      const rows = await db.contract.findMany({ where: { startProofStatus: "objected" }, select: { startProofObjection: true, updatedAt: true } });
+      return rows.map((r) => (r.startProofObjection?.at ? new Date(r.startProofObjection.at) : r.updatedAt));
+    },
+    async resolvedDurationsMs(db) {
+      const rows = await db.contract.findMany({ where: { startProofObjection: { not: null }, startProofStatus: "accepted", startProofAcceptedAt: { not: null } }, select: { startProofObjection: true, startProofAcceptedAt: true }, orderBy: { startProofAcceptedAt: "desc" }, take: RESOLVED_SAMPLE });
+      return rows.filter((r) => r.startProofObjection?.at).map((r) => r.startProofAcceptedAt.getTime() - new Date(r.startProofObjection.at).getTime());
+    },
+  },
 ];
 
 async function targetFor(db, queue) {

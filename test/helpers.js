@@ -404,6 +404,9 @@ async function startServer({ port, paystackUrl, autoRelease = true, storageUrl, 
       R2_ENDPOINT: "",
       OPS_SCHEDULER: "off", // a test server never sweeps or sends a digest on its own
       OPS_SLACK_WEBHOOK_URL: "", // and never posts to the real Slack unless a test passes a fake
+      // Every job type and currency is payable in a test server; the S5 test turns them off to check the gate.
+      JOB_TYPES_ENABLED: "oneDelivery,milestones,monthly,hourly",
+      USD_JOBS_ENABLED: "true",
       ...env,
     },
     stdio: ["ignore", "pipe", "pipe"],

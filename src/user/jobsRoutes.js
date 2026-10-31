@@ -16,6 +16,7 @@ const discovery = require("../discovery");
 const discoveryRules = require("../discoveryRules");
 const { capState } = discoveryRules;
 const { skillByKey } = require("../skills");
+const featureFlags = require("../featureFlags");
 const { recordAudit } = require("../admin/audit");
 
 const router = express.Router();
@@ -152,6 +153,11 @@ async function serializeContract(contract) {
     changeRounds: contract.changeRounds ?? 0,
     changeDueAt: contract.changeDueAt ?? null,
     overdue: Boolean(contract.overdueFlaggedAt),
+    // The start proof and the first 20% (S5). startProofStatus is null on jobs that have none.
+    startProofStatus: contract.startProofStatus ?? null,
+    startProofDueAt: contract.startProofDueAt ?? null,
+    upfrontAmount: contract.upfrontAmount?.toString() ?? null,
+    upfrontPaidAt: contract.upfrontPaidAt ?? null,
     deliverableNote: contract.deliverableNote,
     deliverableUrl: contract.deliverableUrl,
     deliverableFileUrl: contract.deliverableFilePath
@@ -212,6 +218,8 @@ router.get("/:id", async (req, res) => {
 });
 
 router.post("/", requireClient, requireVerifiedIdentity(), async (req, res) => {
+  const unavailable = featureFlags.unavailableReason({ jobType: req.body?.jobType, currency: req.body?.currency });
+  if (unavailable) return res.status(400).json({ ...unavailable, field: unavailable.code === "usd_not_available" ? "currency" : "jobType" });
   const result = await jobsService.postJob({ clientId: req.user.id, input: req.body });
   if (!result.ok) return res.status(result.status).json({ error: result.error, code: result.code, field: result.field });
 
@@ -377,6 +385,10 @@ router.get("/:id/invitations", requireClient, async (req, res) => {
  * the budget that was true at award time.
  */
 router.post("/:id/applications/:applicationId/award", requireClient, requireVerifiedIdentity(), async (req, res) => {
+  // Jobs posted before a money flow was switched off must not be awarded into rules written for something else.
+  const toAward = await prisma.job.findUnique({ where: { id: req.params.id }, select: { jobType: true, currency: true } });
+  const unavailable = toAward ? featureFlags.unavailableReason(toAward) : null;
+  if (unavailable) return res.status(409).json(unavailable);
   const result = await jobsService.awardJob({ jobId: req.params.id, clientId: req.user.id, applicationId: req.params.applicationId });
   if (!result.ok) return res.status(result.status).json({ error: result.error, code: result.code });
   return res.status(201).json({ contract: await serializeContract(result.contract) });
@@ -543,6 +555,17 @@ function requireContractStatus(statuses) {
   };
 }
 
+/** A structured job is delivered only after its start proof was accepted and the first 20% paid (PRD §4.2). */
+function requireStartProofAccepted(req, res, next) {
+  if (req.job.skillKey && req.contract.status === "inProgress" && req.contract.startProofStatus !== "accepted") {
+    return res.status(409).json({
+      error: req.contract.startProofStatus === "submitted" ? "Your start proof is with the client. You can deliver once it is accepted." : "Send your start proof first. You can deliver once the client accepts it.",
+      code: "start_proof_required",
+    });
+  }
+  next();
+}
+
 router.post(
   "/:id/contract/start",
   loadContractForJob,
@@ -562,6 +585,7 @@ router.post(
   loadContractForJob,
   requireAwardedTalent,
   requireContractStatus(["inProgress", "changesRequested"]),
+  requireStartProofAccepted,
   singleFile("file"),
   checkUpload,
   async (req, res) => {

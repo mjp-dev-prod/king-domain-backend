@@ -349,6 +349,8 @@ model User {
   /// The last time the person used the app, moved at most every 10 minutes. "Recently active first" (D23).
   lastActiveAt DateTime @default(now())
   savedSearches SavedSearch[]
+  /// What money is shown in, marked "about" when it is not the job's own currency (D37).
+  displayCurrency String @default("NGN")
   savedTalents  SavedTalent[] @relation("SavedByClient")
   savedBy       SavedTalent[] @relation("SavedTalent")
   invitationsSent Invitation[] @relation("InvitationsSent")
@@ -660,6 +662,25 @@ model Contract {
   changeRequests      ChangeRequest[]
   deliveries          ContractDelivery[]
   reminders           ContractReminder[]
+
+  // ── S5: start proof and the 20% release (PRD §4.2; D2, D8, D35) ──
+  /// null = none yet (older jobs have none). submitted | objected | accepted | redo.
+  startProofStatus      String?
+  startProofSubmittedAt DateTime?
+  /// The client has until this to accept or object; silence accepts (D2).
+  startProofDueAt       DateTime?
+  startProofAcceptedAt  DateTime?
+  /// {reasonCode, note, at}: an objection is checked by a person against the checklist, not for quality (D8).
+  startProofObjection   Json?
+  /// How many times the proof was sent back to be redone; items belong to a round.
+  startProofRound       Int       @default(0)
+  /// 20% of the price, paid to the talent when the proof is accepted. Then only the rest is paid on approval.
+  upfrontAmount         Decimal?  @db.Decimal(12, 2)
+  upfrontClaimedAt      DateTime?
+  upfrontTransferCode   String?
+  upfrontPaidAt         DateTime?
+  startProofItems       StartProofItem[]
+  drafts                ContractDraft[]
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
 
@@ -1264,4 +1285,42 @@ model UserBlock {
 
   @@unique([blockerId, blockedId])
   @@map("user_blocks")
+}
+
+// ── S5: start proof, drafts ────
+
+/// One part of a start proof: a typed answer, a link, or a file in the private bucket (never public).
+model StartProofItem {
+  id          String   @id @default(uuid())
+  contractId  String
+  contract    Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  round       Int      @default(0)
+  fieldKey    String
+  kind        String
+  text        String?
+  name        String?
+  contentType String?
+  sizeBytes   Int?
+  objectKey   String?  @unique
+  /// pending (uploading) or ready
+  status      String   @default("ready")
+  createdAt   DateTime @default(now())
+
+  @@index([contractId, round])
+  @@map("start_proof_items")
+}
+
+/// Work shared during the job without starting the review clock: dated, kept as evidence it was made (research: Fiverr share-draft).
+model ContractDraft {
+  id         String   @id @default(uuid())
+  contractId String
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  note       String   @default("")
+  /// [{name, contentType, sizeBytes, objectKey}]
+  files      Json
+  status     String   @default("pending")
+  createdAt  DateTime @default(now())
+
+  @@index([contractId, createdAt])
+  @@map("contract_drafts")
 }

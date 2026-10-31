@@ -66,6 +66,12 @@ async function findPayoutAttempt(paystack, contractId) {
   throw new Error("Too many failed payout attempts for this contract — check the Paystack dashboard.");
 }
 
+/** What is still owed to the talent: the price less the 20% already paid on the start proof (never more than once). */
+function remainingOf(contract) {
+  const paid = contract.upfrontPaidAt ? Number(contract.upfrontAmount ?? 0) : 0;
+  return Math.round((Number(contract.job.budget) - paid) * 100) / 100;
+}
+
 /**
  * Sends the job budget (never the fee) to the awarded talent and marks the
  * contract approved — only if Paystack accepts the transfer.
@@ -118,7 +124,7 @@ async function releasePayment({ contractId, trigger }, deps) {
     transfer =
       attempt.existing ??
       (await paystack.initiateTransfer({
-        amountNaira: contract.job.budget,
+        amountNaira: remainingOf(contract),
         recipientCode: talentProfile.paystackRecipientCode,
         reference: attempt.reference,
         reason: `Payment for "${contract.job.title}"`,
@@ -311,6 +317,7 @@ const STAGE2_SWEEPS = [
   ["changes", (deps) => changes.sweepChanges(deps)],
   ["overdue", (deps) => extensions.sweepOverdue(deps)],
   ["reminders", (deps) => reminders.sweepReminders(deps)],
+  ["startProof", (deps) => require("./startProof").autoAcceptDue(deps)],
 ];
 
 let ticking = false;
