@@ -439,7 +439,18 @@ function sendAccountDeleted({ to }) {
   });
 }
 
+function sendOpsAlert({ to, title, body, link }) {
+  const linkHtml = link ? `<p><a href="${escapeHtml(link)}">Open in the admin dashboard</a></p>` : "";
+  return send({
+    to,
+    subject: `King Domain alert: ${title}`,
+    html: `<p><strong>${escapeHtml(title)}</strong></p><p>${escapeHtml(body)}</p>${linkHtml}`,
+    fallbackContext: `ops alert "${title}" for ${to}`,
+  });
+}
+
 module.exports = {
+  sendOpsAlert,
   isReservedRecipient,
   sendAccountDeleted,
   sendPasswordReset,

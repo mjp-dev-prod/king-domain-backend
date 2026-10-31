@@ -249,6 +249,21 @@ const adminAuth = require("../src/admin/auth");
 const adminJwt = require("../src/admin/jwt");
 
 /** An active admin for tests; capabilities and reviewer skills are reset to what is passed. */
+/** An incoming-webhook stand-in: records each JSON body, answers 200 "ok" like Slack does (500 when `fail`). */
+function serveFakeSlack({ fail = false } = {}) {
+  const received = [];
+  const server = http.createServer((req, res) => {
+    let raw = "";
+    req.on("data", (c) => (raw += c));
+    req.on("end", () => {
+      received.push(JSON.parse(raw || "{}"));
+      res.writeHead(fail ? 500 : 200, { "Content-Type": "text/plain" });
+      res.end(fail ? "error" : "ok");
+    });
+  });
+  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({ url: `http://127.0.0.1:${server.address().port}/hook`, received, server })));
+}
+
 async function ensureAdmin(email, { role = "admin", capabilities = [], reviewerSkills = [] } = {}) {
   return prisma.adminUser.upsert({
     where: { email },
@@ -359,4 +374,4 @@ const call = async (base, tok, method, p, body) => {
   return { status: r.status, json: await r.json().catch(() => null) };
 };
 
-module.exports = { ensureAdmin, adminTokenFor, prisma, CATEGORY, TITLE_PREFIX, past, future, fakeProvider, serveFakeProvider, scopedPrisma, barrierPrisma, spyMailer, serveFakeStorage, ensureUser, fixtures, seedAward, seedWorking, seedSubmitted, DAY_MS, tokenFor, startServer, call };
+module.exports = { serveFakeSlack, ensureAdmin, adminTokenFor, prisma, CATEGORY, TITLE_PREFIX, past, future, fakeProvider, serveFakeProvider, scopedPrisma, barrierPrisma, spyMailer, serveFakeStorage, ensureUser, fixtures, seedAward, seedWorking, seedSubmitted, DAY_MS, tokenFor, startServer, call };
