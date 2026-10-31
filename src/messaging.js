@@ -28,7 +28,8 @@ const FILE_TYPES = ["application/pdf", "application/zip", "application/x-zip-com
 const ATTACHMENT_RULES = {
   voice: { types: AUDIO_TYPES, maxBytes: 15 * MB },
   image: { types: IMAGE_TYPES, maxBytes: 15 * MB },
-  file: { types: [...FILE_TYPES, ...IMAGE_TYPES], maxBytes: 200 * MB },
+  // Audio is accepted as a file too: the app has no in-app recorder yet, so a voice note is an audio file the person picks.
+  file: { types: [...FILE_TYPES, ...IMAGE_TYPES, ...AUDIO_TYPES], maxBytes: 200 * MB },
 };
 
 /**
