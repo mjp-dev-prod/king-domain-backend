@@ -355,4 +355,4 @@ router.post("/admins/:id/revoke", requireAdmin, requireOwner, async (req, res) =
   return res.json({ ok: true });
 });
 
-module.exports = { router, requireAdmin };
+module.exports = { router, requireAdmin, requireOwner, publicUser };

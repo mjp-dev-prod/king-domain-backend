@@ -328,7 +328,7 @@ async function seedSubmitted(ctx, { changeRounds = 0, contract = {} } = {}) {
 }
 
 /** Starts the real server against the test database, scheduler off, Paystack pointed at `paystackUrl`. */
-async function startServer({ port, paystackUrl, autoRelease = true, storageUrl }) {
+async function startServer({ port, paystackUrl, autoRelease = true, storageUrl, env = {} }) {
   const child = spawn(process.execPath, ["src/index.js"], {
     cwd: path.join(__dirname, ".."),
     env: {
@@ -344,6 +344,9 @@ async function startServer({ port, paystackUrl, autoRelease = true, storageUrl }
       // Off unless the test hands it a fake (serveFakeStorage).
       SUPABASE_URL: storageUrl ?? "",
       SUPABASE_SERVICE_ROLE_KEY: storageUrl ? "test-service-role-key" : "",
+      OPS_SCHEDULER: "off", // a test server never sweeps or sends a digest on its own
+      OPS_SLACK_WEBHOOK_URL: "", // and never posts to the real Slack unless a test passes a fake
+      ...env,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
