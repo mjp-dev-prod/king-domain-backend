@@ -136,6 +136,23 @@ const QUEUES = [
       return rows.map((r) => r.sentAt.getTime() - r.clockStartedAt.getTime());
     },
   },
+  {
+    key: "safety-report",
+    label: "Safety reports",
+    capability: "safety",
+    path: "/safety-reports",
+    // A report on a pair with a live job also raises an urgent alert at once; this is the target for the rest.
+    defaultTargetMinutes: 12 * 60,
+    defaultWhenLate: "The report stays open; the reported message stays visible to the other person until someone decides.",
+    async openSince(db) {
+      const rows = await db.messageReport.findMany({ where: { status: "open" }, select: { createdAt: true } });
+      return rows.map((r) => r.createdAt);
+    },
+    async resolvedDurationsMs(db) {
+      const rows = await db.messageReport.findMany({ where: { status: { not: "open" }, handledAt: { not: null } }, select: { createdAt: true, handledAt: true }, orderBy: { handledAt: "desc" }, take: RESOLVED_SAMPLE });
+      return rows.map((r) => r.handledAt.getTime() - r.createdAt.getTime());
+    },
+  },
 ];
 
 async function targetFor(db, queue) {

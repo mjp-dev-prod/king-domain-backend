@@ -3,7 +3,7 @@
 const { prisma: realPrisma } = require("./db");
 const { skillByKey, SKILLS } = require("./skills");
 const storage = require("./storage");
-const { RULES, DAY, capState, shortlistPromiseHours, isNewOnPlatform, invitationExpiry, matchesSearch, HOUR } = require("./discoveryRules");
+const { RULES, DAY, capState, shortlistPromiseHours, isNewOnPlatform, invitationExpiry, matchesSearch, responseBucket, HOUR } = require("./discoveryRules");
 
 const PAGE_DEFAULT = 20;
 const PAGE_MAX = 50;
@@ -212,6 +212,7 @@ async function talentCard(prisma, user, { viewerId, now }) {
   const seen = new Map();
   for (const s of user.skillSubmissions) if (!seen.has(s.skillKey)) seen.set(s.skillKey, s.decidedAt);
   const verified = [...seen.entries()].map(([skillKey, at]) => ({ skillKey, label: skillByKey(skillKey)?.label ?? skillKey, verifiedAt: at }));
+  const stats = await require("./conversations").responseStatsFor(prisma, user.id, now);
   const [completed, saved] = await Promise.all([
     prisma.contract.count({ where: { status: "approved", job: { applications: { some: { talentId: user.id, status: "selected" } } } } }),
     viewerId ? prisma.savedTalent.count({ where: { clientId: viewerId, talentId: user.id } }) : 0,
@@ -228,6 +229,8 @@ async function talentCard(prisma, user, { viewerId, now }) {
     completedJobs: completed,
     newOnKingDomain: isNewOnPlatform({ firstVerifiedAt: first, completedJobs: completed, now }),
     lastActive: activeBucket(user.lastActiveAt, now),
+    // Shown in buckets and only after 3 conversations; null otherwise. The talent sees how it is worked out (D24).
+    responseTime: responseBucket({ medianMinutes: stats.medianMinutes, conversations: stats.conversations }),
     identityVerified: Boolean(user.identityVerifiedAt),
     saved: saved > 0,
   };

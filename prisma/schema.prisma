@@ -354,6 +354,8 @@ model User {
   invitationsSent Invitation[] @relation("InvitationsSent")
   invitationsGot  Invitation[] @relation("InvitationsGot")
   shortlistRequests ShortlistRequest[]
+  conversationsAsClient Conversation[] @relation("ConversationClient")
+  conversationsAsTalent Conversation[] @relation("ConversationTalent")
 
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
@@ -1153,4 +1155,113 @@ model ShortlistItem {
 
   @@unique([requestId, talentId])
   @@map("shortlist_items")
+}
+
+// ── S4: messaging (PRD §4.7; D18, D24, D27) ────
+
+enum MessageKind {
+  text
+  voice
+  image
+  file
+  /// "What we agreed": counts only once both people confirm it.
+  agreement
+}
+
+enum MessageState {
+  /// Delivered.
+  sent
+  /// Not delivered: it broke the rules for before an award (D18). Only its sender ever sees it.
+  held
+  /// An attachment still uploading.
+  pending
+}
+
+/// One conversation per client and talent. The job's own events appear as cards between the messages.
+model Conversation {
+  id            String    @id @default(uuid())
+  clientId      String
+  client        User      @relation("ConversationClient", fields: [clientId], references: [id], onDelete: Cascade)
+  talentId      String
+  talent        User      @relation("ConversationTalent", fields: [talentId], references: [id], onDelete: Cascade)
+  lastMessageAt DateTime?
+  createdAt     DateTime  @default(now())
+  messages      Message[]
+  reads         ConversationRead[]
+
+  @@unique([clientId, talentId])
+  @@index([talentId])
+  @@map("conversations")
+}
+
+/// Never deleted (D27). A text can be edited for 15 minutes; the first edit keeps the original.
+model Message {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String
+  kind           MessageKind
+  state          MessageState @default(sent)
+  body           String       @default("")
+  /// What the detector found, for a held message: [{code, label, match}].
+  heldFlags      Json?
+  /// Where an attachment lives in the private bucket, and what it is.
+  attachmentKey  String?      @unique
+  attachmentName String?
+  attachmentType String?
+  attachmentBytes Int?
+  durationSec    Int?
+  /// The app's own id for the message, so a retry after a dropped connection never sends it twice.
+  clientMsgId    String
+  editedAt       DateTime?
+  originalBody   String?
+  agreementConfirmedByClientAt DateTime?
+  agreementConfirmedByTalentAt DateTime?
+  createdAt      DateTime     @default(now())
+  reports        MessageReport[]
+
+  @@unique([conversationId, senderId, clientMsgId])
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+model ConversationRead {
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId         String
+  lastReadAt     DateTime
+
+  @@id([conversationId, userId])
+  @@map("conversation_reads")
+}
+
+/// A report on one message, from the other person in the conversation. Open until the team handles it.
+model MessageReport {
+  id          String   @id @default(uuid())
+  messageId   String
+  message     Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  reporterId  String
+  reasonCode  String
+  note        String?
+  /// open, dismissed or actioned
+  status      String   @default("open")
+  handledById String?
+  handledAt   DateTime?
+  handledNote String?
+  createdAt   DateTime @default(now())
+
+  @@unique([messageId, reporterId])
+  @@index([status, createdAt])
+  @@map("message_reports")
+}
+
+/// A block. Not available while a contract between the two is active (D18).
+model UserBlock {
+  id        String   @id @default(uuid())
+  blockerId String
+  blockedId String
+  createdAt DateTime @default(now())
+
+  @@unique([blockerId, blockedId])
+  @@map("user_blocks")
 }

@@ -91,6 +91,11 @@ async function deleteAccount({ userId }, deps = {}) {
         await trx.shortlistItem.deleteMany({ where: { talentId: userId } });
         await trx.shortlistRequest.deleteMany({ where: { clientId: userId } });
 
+        // Messaging (S4): the conversations go (their messages, reports and read marks with them), and so do the files.
+        const messageKeys = (await trx.message.findMany({ where: { attachmentKey: { not: null }, conversation: { OR: [{ clientId: userId }, { talentId: userId }] } }, select: { attachmentKey: true } })).map((m) => m.attachmentKey);
+        await trx.conversation.deleteMany({ where: { OR: [{ clientId: userId }, { talentId: userId }] } });
+        await trx.userBlock.deleteMany({ where: { OR: [{ blockerId: userId }, { blockedId: userId }] } });
+
         const noContract = { contract: { is: null } };
         const counts = {};
         counts.sessions = (await trx.userSession.deleteMany({ where: { userId } })).count;
@@ -136,6 +141,7 @@ async function deleteAccount({ userId }, deps = {}) {
           photoPath: user.photoPath,
           identityPaths,
           submissionKeys,
+          messageKeys,
           proofPaths: (profile?.proofItems ?? []).map((p) => p.filePath).filter(Boolean),
           recipientCode: profile?.paystackRecipientCode ?? null,
           counts,
@@ -162,6 +168,7 @@ async function deleteAccount({ userId }, deps = {}) {
   };
   if (removed.proofPaths.length) await attempt("files", () => storage.removePrivateFiles("proof-items", removed.proofPaths));
   if (removed.identityPaths.length) await attempt("files", () => storage.removePrivateFiles("identity-docs", removed.identityPaths));
+  if (removed.messageKeys.length && storage.privateUploadsConfigured) await attempt("files", () => storage.deletePrivateObjects(removed.messageKeys));
   if (removed.submissionKeys.length) {
     if (storage.privateUploadsConfigured) await attempt("files", () => storage.deletePrivateObjects(removed.submissionKeys));
     else {
