@@ -245,6 +245,23 @@ async function tokenFor(user) {
   return jwt.generateAccessToken(user, sessionId);
 }
 
+const adminAuth = require("../src/admin/auth");
+const adminJwt = require("../src/admin/jwt");
+
+/** An active admin for tests; capabilities and reviewer skills are reset to what is passed. */
+async function ensureAdmin(email, { role = "admin", capabilities = [], reviewerSkills = [] } = {}) {
+  return prisma.adminUser.upsert({
+    where: { email },
+    update: { role, capabilities, reviewerSkills, status: "active" },
+    create: { email, name: email.split("@")[0], role, capabilities, reviewerSkills, status: "active" },
+  });
+}
+
+async function adminTokenFor(admin) {
+  const { sessionId } = await adminAuth.createSession(admin.id, "test-suite");
+  return adminJwt.generateAccessToken(admin, sessionId);
+}
+
 
 /** Three fixed accounts, and a clean slate of the jobs this suite created. */
 async function fixtures() {
@@ -342,4 +359,4 @@ const call = async (base, tok, method, p, body) => {
   return { status: r.status, json: await r.json().catch(() => null) };
 };
 
-module.exports = { prisma, CATEGORY, TITLE_PREFIX, past, future, fakeProvider, serveFakeProvider, scopedPrisma, barrierPrisma, spyMailer, serveFakeStorage, ensureUser, fixtures, seedAward, seedWorking, seedSubmitted, DAY_MS, tokenFor, startServer, call };
+module.exports = { ensureAdmin, adminTokenFor, prisma, CATEGORY, TITLE_PREFIX, past, future, fakeProvider, serveFakeProvider, scopedPrisma, barrierPrisma, spyMailer, serveFakeStorage, ensureUser, fixtures, seedAward, seedWorking, seedSubmitted, DAY_MS, tokenFor, startServer, call };

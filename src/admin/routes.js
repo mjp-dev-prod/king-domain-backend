@@ -61,6 +61,8 @@ function publicUser(user) {
     email: user.email,
     name: user.name,
     role: user.role,
+    capabilities: user.capabilities ?? [],
+    reviewerSkills: user.reviewerSkills ?? [],
     status: user.status,
     lastLoginAt: user.lastLoginAt,
     createdAt: user.createdAt,

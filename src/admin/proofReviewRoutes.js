@@ -1,6 +1,8 @@
 const express = require("express");
 const { prisma } = require("../db");
 const { requireAdmin } = require("./routes");
+const { requireCapability } = require("./capabilities");
+const { recordAudit } = require("./audit");
 const { getProofFileSignedUrl } = require("../storage");
 const mailer = require("./mailer");
 
@@ -75,7 +77,7 @@ router.get("/:id", async (req, res) => {
   return res.json({ proofItem: await serializeProofItem(item) });
 });
 
-router.post("/:id/approve", async (req, res) => {
+router.post("/:id/approve", requireCapability("reviewer"), async (req, res) => {
   const item = await prisma.proofItem.findUnique({ where: { id: req.params.id }, include: withTalent });
   if (!item) return res.status(404).json({ error: "Proof item not found." });
   if (item.status === "verified") {
@@ -84,10 +86,19 @@ router.post("/:id/approve", async (req, res) => {
 
   let updated;
   try {
-    updated = await prisma.proofItem.update({
-      where: { id: item.id },
-      data: { status: "verified", reviewedById: req.admin.id, reviewedAt: new Date() },
-      include: withTalent,
+    updated = await prisma.$transaction(async (tx) => {
+      const row = await tx.proofItem.update({
+        where: { id: item.id },
+        data: { status: "verified", reviewedById: req.admin.id, reviewedAt: new Date() },
+        include: withTalent,
+      });
+      await recordAudit(tx, req.admin, {
+        action: "proof.approve",
+        subjectType: "ProofItem",
+        subjectId: item.id,
+        details: { title: item.title, category: item.category, talentUserId: item.talentProfile?.userId ?? null },
+      });
+      return row;
     });
   } catch (err) {
     if (err.code === RECORD_GONE) return res.status(409).json({ error: ALREADY_HANDLED });
@@ -111,7 +122,7 @@ router.post("/:id/approve", async (req, res) => {
  * no explanation. Removal is only ever for items that never reached
  * verified, same rule as the talent's own delete in user/routes.js.
  */
-router.post("/:id/reject", async (req, res) => {
+router.post("/:id/reject", requireCapability("reviewer"), async (req, res) => {
   const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
   if (reason.length < REJECT_REASON_MIN) {
     return res.status(400).json({ error: `Give the talent a reason of at least ${REJECT_REASON_MIN} characters.` });
@@ -127,7 +138,16 @@ router.post("/:id/reject", async (req, res) => {
   }
 
   try {
-    await prisma.proofItem.delete({ where: { id: item.id } });
+    await prisma.$transaction(async (tx) => {
+      await tx.proofItem.delete({ where: { id: item.id } });
+      await recordAudit(tx, req.admin, {
+        action: "proof.reject",
+        subjectType: "ProofItem",
+        subjectId: item.id,
+        note: reason,
+        details: { title: item.title, category: item.category, talentUserId: item.talentProfile?.userId ?? null },
+      });
+    });
   } catch (err) {
     if (err.code === RECORD_GONE) return res.status(409).json({ error: ALREADY_HANDLED });
     throw err;
