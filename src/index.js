@@ -99,6 +99,11 @@ app.get("/waitlist/count", async (req, res) => {
   res.json({ count: await waitlist.count() });
 });
 
+// Public: the app builds skill pickers, briefs and start-proof forms from this (PRD §4.2).
+app.get("/skills", (req, res) => {
+  res.json(skills.catalogue());
+});
+
 app.use("/users", user.router);
 app.use("/jobs", userJobs.router);
 app.use("/admin", admin.router);
