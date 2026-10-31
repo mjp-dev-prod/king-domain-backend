@@ -150,10 +150,13 @@ async function markVerified(tx, submission) {
   return tx.proofItem.create({ data: { talentProfileId: profile.id, category, title, status: "verified", reviewedAt: new Date() } });
 }
 
-/** All output files' ETags this person sent in earlier attempts that ended in "Not yet". */
+/**
+ * All output files' ETags this person sent in earlier attempts the REVIEWERS turned down. An attempt stopped at the
+ * authenticity check never reached them, so resending its files is not resending rejected work.
+ */
 async function rejectedEtags(db, userId, skillKey, exceptId) {
   const files = await db.submissionFile.findMany({
-    where: { role: "output", status: "ready", etag: { not: null }, submission: { userId, skillKey, status: "notYet", id: { not: exceptId } } },
+    where: { role: "output", status: "ready", etag: { not: null }, submission: { userId, skillKey, status: "notYet", resultReasons: { path: ["kind"], equals: "review" }, id: { not: exceptId } } },
     select: { etag: true },
   });
   return files.map((f) => f.etag);

@@ -346,9 +346,11 @@ describe("stopping and banning at the authenticity step", () => {
     assert.equal((await api(ta, "POST", `/users/me/skills/${SKILL}/submissions`)).status, 201, "no penalty: they can start again");
     await prisma.skillSubmission.updateMany({ where: { userId: ctx.talentA.id, status: "draft" }, data: { status: "removed" } });
 
-    const b = await buildReady(ta, 32);
+    // The very same files again after a stop (which never reached reviewers) are not "rejected work sent again".
+    const b = await buildReady(ta, 31);
     await api(ta, "PATCH", `/users/me/submissions/${b}`, { acceptTerms: true });
     await api(ta, "POST", `/users/me/submissions/${b}/submit`);
+    assert.equal((await api(checkerTok, "GET", `/admin/authenticity/${b}`)).json.submission.repeatOfRejected, false);
     assert.equal((await api(checkerTok, "POST", `/admin/authenticity/${b}/ban`, { note: "This reel is on another editor's channel." })).status, 200);
     const blocked = await api(ta, "POST", `/users/me/skills/${SKILL}/submissions`);
     assert.equal(blocked.status, 403);
