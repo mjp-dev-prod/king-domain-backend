@@ -36,6 +36,18 @@ enum AdminRole {
   admin // read-only access to the dashboard
 }
 
+/// What an admin may do beyond reading (PRD §2, decision D43). An owner may do everything.
+/// One person can hold several.
+enum AdminCapability {
+  reviewer    // proof verification, limited to reviewerSkills
+  checker     // authenticity, identity and student documents
+  safety      // reports, job-post screening
+  disputes    // dispute rulings, start-proof objections
+  finance     // refunds, splits, chargebacks, payout failures
+  support     // shortlists, general help
+  shareholder // read-only: ledger, metrics, audit log
+}
+
 enum AdminStatus {
   invited // invite issued, password not yet set
   active
@@ -52,6 +64,12 @@ model AdminUser {
   lastLoginAt  DateTime?
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
+
+  capabilities   AdminCapability[] @default([])
+  /// Skill keys from src/skills.js this admin may review (only with the reviewer capability).
+  reviewerSkills String[]          @default([])
+  auditEvents    AdminAuditEvent[]
+  onCallShifts   OnCallShift[]
 
   tokens   AdminToken[]
   sessions AdminSession[]
@@ -667,4 +685,70 @@ model ContractReminder {
 
   @@unique([contractId, key])
   @@map("contract_reminders")
+}
+
+/// Every action an admin takes, kept unchanged (PRD §4.11, decision D43). Never updated or deleted.
+model AdminAuditEvent {
+  id          String    @id @default(uuid())
+  actorId     String
+  actor       AdminUser @relation(fields: [actorId], references: [id])
+  /// The actor's role and capabilities at the time, e.g. "admin:checker,reviewer" or "owner".
+  actorRole   String
+  /// Dotted verb, e.g. "proof.approve", "admin.capabilities", "oncall.create".
+  action      String
+  subjectType String
+  subjectId   String
+  reasonCode  String?
+  note        String?
+  details     Json?
+  createdAt   DateTime  @default(now())
+
+  @@index([subjectType, subjectId])
+  @@index([actorId, createdAt])
+  @@index([createdAt])
+  @@map("admin_audit_events")
+}
+
+/// A queue's promised handling time, stored as data so it can change without a deploy.
+/// A queue without a row uses the default in src/admin/inbox.js.
+model QueueTarget {
+  queueKey        String   @id
+  targetMinutes   Int
+  defaultWhenLate String
+  updatedAt       DateTime @updatedAt
+
+  @@map("queue_targets")
+}
+
+/// Who is on call, and when (decision D45).
+model OnCallShift {
+  id        String    @id @default(uuid())
+  adminId   String
+  admin     AdminUser @relation(fields: [adminId], references: [id])
+  startsAt  DateTime
+  endsAt    DateTime
+  createdAt DateTime  @default(now())
+
+  @@index([startsAt, endsAt])
+  @@map("on_call_shifts")
+}
+
+/// An alert to the team (decision D46). Urgent ones go out at once; digest ones wait for the daily digest.
+model OpsAlert {
+  id         String    @id @default(uuid())
+  /// "urgent" or "digest"
+  severity   String
+  queueKey   String
+  title      String
+  body       String
+  link       String?
+  slackSent  Boolean   @default(false)
+  /// Addresses the mailer confirmed it sent to (read back, not attempted).
+  emailedTo  String[]  @default([])
+  digestedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([severity, digestedAt])
+  @@index([queueKey, createdAt])
+  @@map("ops_alerts")
 }
