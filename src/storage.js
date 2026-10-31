@@ -1,6 +1,6 @@
 const crypto = require("node:crypto");
 const { createClient } = require("@supabase/supabase-js");
-const { S3Client, PutObjectCommand, HeadObjectCommand } = require("@aws-sdk/client-s3");
+const { S3Client, PutObjectCommand, HeadObjectCommand, GetObjectCommand, DeleteObjectsCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
 // Server-side only — the service role key bypasses row-level security, so
@@ -247,6 +247,59 @@ async function removeAvatar(path) {
   if (error) throw new Error(`Supabase remove failed: ${error.message}`);
 }
 
+// ── Skill evidence and walkthrough videos: a PRIVATE Cloudflare R2 bucket (PRD §4.3; D: video on R2) ──
+// Uploads go straight from the phone to R2 through a presigned link, so a big video never passes through
+// this server. The bucket must be a separate, private one (never the public APK bucket): R2_PRIVATE_BUCKET.
+// R2_ENDPOINT overrides the account endpoint (tests point it at a local fake; path-style then).
+const privateBucketName = process.env.R2_PRIVATE_BUCKET || "";
+const privateUploadsConfigured = Boolean(r2Configured && privateBucketName);
+const r2Private = privateUploadsConfigured
+  ? new S3Client({
+      region: "auto",
+      endpoint: process.env.R2_ENDPOINT || `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      forcePathStyle: Boolean(process.env.R2_ENDPOINT),
+      credentials: { accessKeyId: process.env.R2_ACCESS_KEY_ID, secretAccessKey: process.env.R2_SECRET_ACCESS_KEY },
+    })
+  : null;
+
+function requirePrivateR2() {
+  if (!r2Private) throw new Error("Private uploads are not configured — set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and R2_PRIVATE_BUCKET.");
+  return r2Private;
+}
+
+/** A link the phone PUTs the file to. The content type is part of the signature, so the file cannot be swapped for another kind. */
+async function presignPrivatePut({ key, contentType, expiresInSeconds = 3600 }) {
+  const client = requirePrivateR2();
+  return getSignedUrl(client, new PutObjectCommand({ Bucket: privateBucketName, Key: key, ContentType: contentType }), {
+    expiresIn: expiresInSeconds,
+    signableHeaders: new Set(["content-type"]),
+  });
+}
+
+/** What R2 actually holds at the key: size and ETag, or null when nothing was uploaded. */
+async function headPrivate(key) {
+  const client = requirePrivateR2();
+  try {
+    const r = await client.send(new HeadObjectCommand({ Bucket: privateBucketName, Key: key }));
+    return { size: Number(r.ContentLength), etag: String(r.ETag ?? "").replace(/"/g, ""), contentType: r.ContentType };
+  } catch (err) {
+    if (err?.$metadata?.httpStatusCode === 404 || err?.name === "NotFound") return null;
+    throw err;
+  }
+}
+
+/** A short-lived link a reviewer opens the file with. */
+function presignPrivateGet(key, expiresInSeconds = 300) {
+  const client = requirePrivateR2();
+  return getSignedUrl(client, new GetObjectCommand({ Bucket: privateBucketName, Key: key }), { expiresIn: expiresInSeconds });
+}
+
+async function deletePrivateObjects(keys) {
+  if (!keys.length) return;
+  const client = requirePrivateR2();
+  await client.send(new DeleteObjectsCommand({ Bucket: privateBucketName, Delete: { Objects: keys.map((Key) => ({ Key })) } }));
+}
+
 // ── Identity documents and selfie videos: a PRIVATE bucket (PRD §4.4) ──
 // Opened only inside a review, through links that expire in minutes. Created the first time it is
 // needed, the same way the avatars bucket is, so a fresh environment needs no manual step.
@@ -281,6 +334,11 @@ function getIdentityFileSignedUrl(path, expiresInSeconds = 300) {
 }
 
 module.exports = {
+  privateUploadsConfigured,
+  presignPrivatePut,
+  headPrivate,
+  presignPrivateGet,
+  deletePrivateObjects,
   IDENTITY_BUCKET,
   uploadIdentityFile,
   getIdentityFileSignedUrl,

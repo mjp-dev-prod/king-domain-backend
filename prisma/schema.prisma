@@ -344,6 +344,8 @@ model User {
   guardianConfirmedAt DateTime?
   identityChecks   IdentityCheck[]
   guardianConsents GuardianConsent[]
+  skillSubmissions SkillSubmission[]
+  skillRestrictions SkillRestriction[]
 
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
@@ -848,4 +850,138 @@ model GuardianConsent {
 
   @@index([userId])
   @@map("guardian_consents")
+}
+
+// ── S2: proving a skill (PRD §4.3; decisions D5 to D9) ────
+
+enum SubmissionStatus {
+  draft
+  authenticity
+  review
+  verified
+  notYet
+  removed
+}
+
+enum SubmissionFileRole {
+  output
+  working
+  draft
+  walkthrough
+}
+
+enum SubmissionFileStatus {
+  pending
+  ready
+}
+
+/// One attempt to prove one skill. Never deleted: a result and its history stay visible to the person.
+model SkillSubmission {
+  id       String           @id @default(uuid())
+  userId   String
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// A key from src/skills.js.
+  skillKey String
+  status   SubmissionStatus @default(draft)
+  declaredOwnWork Boolean   @default(false)
+  aiUsed   Boolean          @default(false)
+  aiNote   String?
+  /// Accepted before sending again after a "Not yet" (D9).
+  termsAcceptedAt DateTime?
+  submittedAt DateTime?
+
+  /// The authenticity check, by a checker.
+  authenticityById String?
+  authenticityAt   DateTime?
+  authenticityChecklist Json?
+  authenticityNote String?
+  /// Set by the system on submit: every finished file was in an earlier "Not yet" attempt. A checker decides.
+  repeatOfRejected Boolean @default(false)
+
+  /// {kind: "review" | "authenticity" | "removed", lines: [...], comments: [...], note}
+  resultReasons Json?
+  decidedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  pieces  SubmissionPiece[]
+  files   SubmissionFile[]
+  reviews SubmissionReview[]
+
+  @@index([userId, skillKey])
+  @@index([status, submittedAt])
+  @@map("skill_submissions")
+}
+
+model SubmissionPiece {
+  id           String          @id @default(uuid())
+  submissionId String
+  submission   SkillSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  position     Int
+  title        String          @default("")
+  /// What the client asked for.
+  brief        String          @default("")
+  /// Their role: alone, or which part in a team.
+  role         String          @default("")
+  /// When it was made, as the person writes it ("March 2026").
+  madeOn       String          @default("")
+  liveLink     String          @default("")
+  files        SubmissionFile[]
+
+  @@index([submissionId])
+  @@map("submission_pieces")
+}
+
+model SubmissionFile {
+  id           String               @id @default(uuid())
+  submissionId String
+  submission   SkillSubmission      @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  pieceId      String?
+  piece        SubmissionPiece?     @relation(fields: [pieceId], references: [id], onDelete: Cascade)
+  role         SubmissionFileRole
+  name         String
+  contentType  String
+  sizeBytes    Int
+  /// Key in the private R2 bucket.
+  objectKey    String               @unique
+  /// R2's ETag after the upload: the file's MD5 for a single upload, used to spot unchanged resends.
+  etag         String?
+  status       SubmissionFileStatus @default(pending)
+  createdAt    DateTime             @default(now())
+
+  @@index([submissionId])
+  @@map("submission_files")
+}
+
+/// One reviewer's scores. Two are needed, a third when they disagree. The reviewer is an AdminUser id.
+model SubmissionReview {
+  id           String          @id @default(uuid())
+  submissionId String
+  submission   SkillSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  reviewerId   String
+  scores       Json
+  verdict      String
+  comment      String          @default("")
+  createdAt    DateTime        @default(now())
+
+  @@unique([submissionId, reviewerId])
+  @@map("submission_reviews")
+}
+
+/// No submissions in a skill until `until` (null = permanently): the penalty for resending rejected work
+/// (2 then 3 months) or a ban for stolen work (D9).
+model SkillRestriction {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skillKey  String
+  /// "repeat" or "ban"
+  kind      String
+  until     DateTime?
+  reason    String
+  createdById String?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, skillKey])
+  @@map("skill_restrictions")
 }
