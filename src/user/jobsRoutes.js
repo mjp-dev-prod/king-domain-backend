@@ -17,6 +17,7 @@ const discoveryRules = require("../discoveryRules");
 const { capState } = discoveryRules;
 const { skillByKey } = require("../skills");
 const featureFlags = require("../featureFlags");
+const premium = require("../premium");
 const { recordAudit } = require("../admin/audit");
 
 const router = express.Router();
@@ -359,7 +360,10 @@ router.post("/:id/reopen", requireClient, async (req, res) => {
   if (!job.skillKey || job.postStatus !== "live" || job.closedAt || job.awardedApplicationId) return res.status(409).json({ error: "This job can't be reopened.", code: "not_open" });
   await discovery.attachOpenCounts(prisma, [job]);
   if (!capState({ applicantCount: job._openCount ?? job._count.applications, openedAt: job.reopenedAt ?? job.liveAt ?? job.createdAt }).paused) return res.status(409).json({ error: "This job is still taking applications.", code: "not_paused" });
-  if (process.env.REOPEN_REQUIRES_PREMIUM === "true") return res.status(402).json({ error: "Reopening a paused job is a premium feature.", code: "premium_required" });
+  // Premium (S8): with PREMIUM_ENFORCED a reopen costs one entitlement bought through Google Play; the older switch still holds it too.
+  const paid = await premium.use({ userId: req.user.id, feature: "reopen_job", usedOn: job.id });
+  if (paid.ok === false) return res.status(paid.status).json({ error: paid.error, code: paid.code, productId: paid.productId, feature: paid.feature });
+  if (process.env.REOPEN_REQUIRES_PREMIUM === "true" && paid.free) return res.status(402).json({ error: "Reopening a paused job is a premium feature.", code: "premium_required", feature: "reopen_job" });
   // The cap counts applicants, so reopening also lifts it: another 50 may apply from now.
   await prisma.job.update({ where: { id: job.id }, data: { reopenedAt: new Date() } });
   return res.json({ ok: true });

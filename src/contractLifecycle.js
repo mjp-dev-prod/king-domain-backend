@@ -320,6 +320,7 @@ const STAGE2_SWEEPS = [
   ["startProof", (deps) => require("./startProof").autoAcceptDue(deps)],
   ["disputes", (deps) => require("./disputes").sweepDisputes(deps)],
   ["reviewReminders", (deps) => require("./reviewReminders").sweepReviewReminders(deps)],
+  ["packageOrders", (deps) => require("./packages").sweepOrders(deps)],
 ];
 
 let ticking = false;

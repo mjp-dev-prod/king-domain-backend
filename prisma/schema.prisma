@@ -1540,3 +1540,96 @@ model Credential {
   @@index([userId, issuedAt])
   @@map("credentials")
 }
+
+// ── S8: packages and premium (PRD §4.6, §4.10; D4, D28, D38, D39) ────
+
+/// A ready-made offer a verified talent publishes: up to three tiers per skill, with the skill's standard fields so
+/// packages compare (D4). One delivery for now; monthly waits for its money flow.
+model Package {
+  id           String   @id @default(uuid())
+  talentId     String
+  skillKey     String
+  /// basic, standard or premium: names for the tiers, not a ranking.
+  tier         String
+  title        String
+  summary      String
+  price        Decimal  @db.Decimal(12, 2)
+  currency     String   @default("NGN")
+  deliveryDays Int
+  /// Rounds of changes included (0 to 2: the agreed limit).
+  revisions    Int
+  /// The standard fields: what is included, how many, in which formats.
+  included     String
+  quantity     Int
+  formats      String
+  /// active or paused.
+  status       String   @default("active")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([talentId, skillKey, tier])
+  @@index([skillKey, status])
+  @@map("packages")
+}
+
+/// A client buying a package. The talent has 48 hours to accept; accepting awards the job, and the usual rules apply from there
+/// (pay within 24 hours, start proof, delivery, review).
+model PackageOrder {
+  id            String   @id @default(uuid())
+  packageId     String
+  clientId      String
+  talentId      String
+  /// requested, accepted, declined, expired or cancelled.
+  status        String   @default("requested")
+  /// What the client filled in (the skill's brief form).
+  brief         Json
+  note          String   @default("")
+  /// The package as it was when ordered, so a later edit never changes what was bought.
+  snapshot      Json
+  jobId         String?
+  applicationId String?
+  answerDueAt   DateTime
+  answeredAt    DateTime?
+  createdAt     DateTime @default(now())
+
+  @@index([clientId, createdAt])
+  @@index([talentId, status])
+  @@index([status, answerDueAt])
+  @@map("package_orders")
+}
+
+/// One premium purchase bought through Google Play Billing and verified with Google, ready to be used once (D39). Premium never
+/// buys a better place than another person (D38).
+model Entitlement {
+  id            String   @id @default(uuid())
+  userId        String
+  /// reopen_job or pre_apply_question.
+  feature       String
+  productId     String
+  purchaseToken String   @unique
+  orderId       String?
+  /// granted (unused) or used.
+  status        String   @default("granted")
+  usedOn        String?
+  usedAt        DateTime?
+  createdAt     DateTime @default(now())
+
+  @@index([userId, feature, status])
+  @@map("entitlements")
+}
+
+/// A premium talent's question to a client before applying. The answer is added to the job for every applicant, so
+/// information is never paywalled (D38).
+model PreApplyQuestion {
+  id            String   @id @default(uuid())
+  jobId         String
+  talentId      String
+  question      String
+  answer        String?
+  answeredAt    DateTime?
+  entitlementId String?
+  createdAt     DateTime @default(now())
+
+  @@index([jobId, createdAt])
+  @@map("pre_apply_questions")
+}
