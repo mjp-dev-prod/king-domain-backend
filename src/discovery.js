@@ -185,7 +185,10 @@ async function clientRecord(prisma, clientId) {
   ]);
   const totals = {};
   for (const j of paid) totals[j.currency] = (totals[j.currency] ?? 0) + Number(j.budget);
+  // What talents said about this client, and how they actually behave (D19), as plain counts.
+  const reputation = await require("./reputation").clientReputation(clientId, { prisma }).catch(() => null);
   return {
+    reputation,
     memberSince: user?.createdAt ?? null,
     identityVerified: Boolean(user?.identityVerifiedAt),
     clientKind: user?.clientKind ?? null,
@@ -296,7 +299,9 @@ async function talentProfile(viewer, talentId, deps = {}) {
       ),
     })),
   );
-  return { talent: { ...card, bio: user.talentProfile?.bio ?? null }, work };
+  // Plain counts per skill, the visible reviews with their facts, and Proven levels. Never a score or a rank (D29).
+  const reputation = await require("./reputation").talentReputation(talentId, { prisma, now });
+  return { talent: { ...card, bio: user.talentProfile?.bio ?? null }, work, reputation };
 }
 
 // ── Invitations ──────────────────────────────────────────

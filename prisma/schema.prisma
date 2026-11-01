@@ -1457,3 +1457,86 @@ model Chargeback {
   @@index([status, dueAt])
   @@map("chargebacks")
 }
+
+// ── S7: reviews and reputation (PRD §4.8; D29 to D32) ────
+
+/// One person's review of the other after a job. No stars: yes / partly / no questions, a recommendation, a comment.
+/// Hidden from everyone but its author until both reviews are in or 14 days have passed, then locked (D30).
+model Review {
+  id          String   @id @default(uuid())
+  jobId       String
+  contractId  String
+  authorId    String
+  subjectId   String
+  /// client_to_talent or talent_to_client.
+  direction   String
+  /// client: {followedBrief, qualityAsAgreed, communicated: yes|partly|no, recommend: bool}.
+  /// talent: {briefClear, feedbackClear, paidFairly: yes|partly|no, workAgain: bool}.
+  answers     Json
+  comment     String   @default("")
+  /// The private question, seen only by King Domain: "would you work with this person again?" (D31). Never serialized to anyone else.
+  privateAgain Boolean
+  /// The review window closes 14 days after the job completed.
+  windowEndsAt DateTime
+  /// One public reply from the person reviewed.
+  reply       String?
+  repliedAt   DateTime?
+  /// Removed only for abuse, personal data, irrelevance or leverage (never for disagreement).
+  removedAt   DateTime?
+  removedReason String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  reports ReviewReport[]
+
+  @@unique([contractId, authorId])
+  @@index([subjectId, createdAt])
+  @@index([contractId])
+  @@map("reviews")
+}
+
+/// Someone reported a review that broke the rules. A person decides (queue: reported reviews).
+model ReviewReport {
+  id          String   @id @default(uuid())
+  reviewId    String
+  review      Review   @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  reporterId  String
+  /// abuse, personal_info, unrelated or leverage.
+  reasonCode  String
+  note        String   @default("")
+  /// open, removed or kept.
+  status      String   @default("open")
+  handledById String?
+  handledNote String?
+  handledAt   DateTime?
+  createdAt   DateTime @default(now())
+
+  @@unique([reviewId, reporterId])
+  @@index([status, createdAt])
+  @@map("review_reports")
+}
+
+/// A portable credential (Open Badges 3.0): a completed job, a verified skill or a Proven level. Signed as a VC-JWT
+/// when the issuer key is set; otherwise it is recorded but cannot be shared yet.
+model Credential {
+  id         String    @id @default(uuid())
+  userId     String
+  /// job_completed, skill_verified or proven.
+  kind       String
+  skillKey   String?
+  jobId      String?
+  /// One credential per achievement: "job:<id>", "verified:<skill>", "proven:<skill>".
+  dedupeKey  String
+  title      String
+  description String
+  issuedAt   DateTime  @default(now())
+  /// The compact JWS, once signed.
+  jws        String?
+  /// Proven can be lost when the signal turns bad (D32); the credential is then revoked, not deleted.
+  revokedAt  DateTime?
+  revokedReason String?
+
+  @@unique([userId, dedupeKey])
+  @@index([userId, issuedAt])
+  @@map("credentials")
+}

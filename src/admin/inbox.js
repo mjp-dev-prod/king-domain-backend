@@ -154,6 +154,22 @@ const QUEUES = [
     },
   },
   {
+    key: "review-report",
+    label: "Reported reviews",
+    capability: "safety",
+    path: "/review-reports",
+    defaultTargetMinutes: 48 * 60,
+    defaultWhenLate: "The review stays visible while it waits; a review that breaks the rules stays up longer.",
+    async openSince(db) {
+      const rows = await db.reviewReport.findMany({ where: { status: "open" }, select: { createdAt: true } });
+      return rows.map((r) => r.createdAt);
+    },
+    async resolvedDurationsMs(db) {
+      const rows = await db.reviewReport.findMany({ where: { status: { not: "open" }, handledAt: { not: null } }, select: { createdAt: true, handledAt: true }, orderBy: { handledAt: "desc" }, take: RESOLVED_SAMPLE });
+      return rows.map((r) => r.handledAt.getTime() - r.createdAt.getTime());
+    },
+  },
+  {
     key: "dispute",
     label: "Disputes",
     capability: "disputes",
