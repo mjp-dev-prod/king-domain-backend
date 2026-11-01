@@ -62,22 +62,22 @@ async function candidates(prisma, at, autoRelease) {
   const list = [];
 
   const asking = await prisma.contract.findMany({
-    where: { extensions: { some: { status: "pending", answerDueAt: { lte: horizon } } } },
+    where: { disputeHoldAt: null, extensions: { some: { status: "pending", answerDueAt: { lte: horizon } } } },
     include: { job: true, extensions: { where: { status: "pending" } } },
   });
   for (const c of asking) for (const e of c.extensions) list.push({ clock: "extension", contract: c, due: e.answerDueAt, ref: e.id });
 
   // Review silence only means something while auto-release is on.
   if (autoRelease) {
-    const reviewing = await prisma.contract.findMany({ where: { status: "submitted", reviewDueAt: { lte: horizon } }, include: { job: true } });
+    const reviewing = await prisma.contract.findMany({ where: { status: "submitted", reviewDueAt: { lte: horizon }, disputeHoldAt: null }, include: { job: true } });
     for (const c of reviewing) list.push({ clock: "review", contract: c, due: c.reviewDueAt, ref: c.reviewDueAt.toISOString() });
   }
 
-  const resubmitting = await prisma.contract.findMany({ where: { status: "changesRequested", changeDueAt: { lte: horizon } }, include: { job: true } });
+  const resubmitting = await prisma.contract.findMany({ where: { status: "changesRequested", changeDueAt: { lte: horizon }, disputeHoldAt: null }, include: { job: true } });
   for (const c of resubmitting) list.push({ clock: "change", contract: c, due: c.changeDueAt, ref: `round${c.changeRounds}` });
 
   const working = await prisma.contract.findMany({
-    where: { status: { in: ["funded", "inProgress"] }, overdueFlaggedAt: null, deliverByAt: { lte: horizon } },
+    where: { status: { in: ["funded", "inProgress"] }, overdueFlaggedAt: null, deliverByAt: { lte: horizon }, disputeHoldAt: null },
     include: { job: true },
   });
   for (const c of working) {

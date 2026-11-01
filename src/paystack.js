@@ -86,7 +86,17 @@ async function initializeTransaction({ email, amountNaira, reference, metadata }
  */
 async function verifyTransaction(reference) {
   const data = await paystackFetch(`/transaction/verify/${encodeURIComponent(reference)}`);
-  return { status: data.status, amountKobo: data.amount, reference: data.reference };
+  return {
+    status: data.status,
+    amountKobo: data.amount,
+    reference: data.reference,
+    // What a chargeback answer needs (paystack.com/docs/payments/manage-disputes): the card's first six and last four.
+    bin: data.authorization?.bin ?? null,
+    last4: data.authorization?.last4 ?? null,
+    channel: data.channel ?? null,
+    paidAt: data.paid_at ?? null,
+    customerEmail: data.customer?.email ?? null,
+  };
 }
 
 /** Nigerian banks, for the bank-details picker UI. */
@@ -166,7 +176,62 @@ async function verifyTransfer(reference) {
   }
 }
 
+// ── Refunds (paystack.com/docs/api/refund) ──────────────────
+
+/**
+ * Returns part of a card or bank payment to the client. `amount` is in kobo and may not exceed the original
+ * transaction; Paystack keeps its own charge on a refund and the 10% fee is never refunded by us (D35).
+ * The refund is queued (status pending); refund.processed / refund.failed webhooks follow.
+ */
+async function createRefund({ reference, amountNaira, customerNote, merchantNote }) {
+  const data = await paystackFetch("/refund", {
+    method: "POST",
+    body: { transaction: reference, amount: toKobo(amountNaira), currency: "NGN", customer_note: customerNote, merchant_note: merchantNote },
+  });
+  return { id: data.id, status: data.status, amountKobo: data.amount, expectedAt: data.expected_at ?? null };
+}
+
+/** Refunds already made on a transaction, so a retry after a crash never refunds twice. */
+async function listRefunds(reference) {
+  const data = await paystackFetch(`/refund?reference=${encodeURIComponent(reference)}&currency=NGN`);
+  return (Array.isArray(data) ? data : []).map((r) => ({ id: r.id, status: r.status, amountKobo: r.amount }));
+}
+
+// ── Chargebacks (paystack.com/docs/api/dispute) ─────────────
+
+async function fetchChargeback(id) {
+  const d = await paystackFetch(`/dispute/${encodeURIComponent(id)}`);
+  return { id: d.id, status: d.status, resolution: d.resolution ?? null, dueAt: d.dueAt ?? d.due_at ?? null, bin: d.bin ?? null, last4: d.last4 ?? null };
+}
+
+async function addChargebackEvidence(id, { customerEmail, customerName, customerPhone, serviceDetails, deliveryAddress, deliveryDate }) {
+  return paystackFetch(`/dispute/${encodeURIComponent(id)}/evidence`, {
+    method: "POST",
+    body: { customer_email: customerEmail, customer_name: customerName, customer_phone: customerPhone, service_details: serviceDetails, delivery_address: deliveryAddress, delivery_date: deliveryDate },
+  });
+}
+
+/** A signed link to put the receipt PDF or the delivered files on, and the name to pass back when resolving. */
+async function chargebackUploadUrl(id, filename) {
+  const d = await paystackFetch(`/dispute/${encodeURIComponent(id)}/upload_url?upload_filename=${encodeURIComponent(filename)}`);
+  return { signedUrl: d.signedUrl, fileName: d.fileName };
+}
+
+/** resolution is "declined" (we contest it, with evidence) or "merchant-accepted" (we accept it). */
+async function resolveChargeback(id, { resolution, message, uploadedFilename, refundAmountNaira }) {
+  const body = { resolution, message };
+  if (uploadedFilename) body.uploaded_filename = uploadedFilename;
+  if (refundAmountNaira != null) body.refund_amount = toKobo(refundAmountNaira);
+  return paystackFetch(`/dispute/${encodeURIComponent(id)}/resolve`, { method: "PUT", body });
+}
+
 module.exports = {
+  createRefund,
+  listRefunds,
+  fetchChargeback,
+  addChargebackEvidence,
+  chargebackUploadUrl,
+  resolveChargeback,
   configured,
   PLATFORM_FEE_RATE,
   calculatePlatformFee,

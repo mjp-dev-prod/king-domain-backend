@@ -318,6 +318,7 @@ const STAGE2_SWEEPS = [
   ["overdue", (deps) => extensions.sweepOverdue(deps)],
   ["reminders", (deps) => reminders.sweepReminders(deps)],
   ["startProof", (deps) => require("./startProof").autoAcceptDue(deps)],
+  ["disputes", (deps) => require("./disputes").sweepDisputes(deps)],
 ];
 
 let ticking = false;
@@ -346,7 +347,7 @@ async function runTick(deps) {
 
     if (autoRelease) {
       const due = await prisma.contract.findMany({
-        where: { status: "submitted", reviewDueAt: { lte: at } },
+        where: { status: "submitted", reviewDueAt: { lte: at }, disputeHoldAt: null },
         select: { id: true },
       });
       for (const { id } of due) {

@@ -59,6 +59,7 @@ async function resolveSession(rawToken) {
   if (!session) return null;
   if (session.revokedAt) return null;
   if (session.expiresAt < new Date()) return null;
+  if (session.user.removedAt) return null; // removed after a lost chargeback (D36)
 
   // Fire-and-forget: last-seen is for display, not correctness.
   prisma.userSession
@@ -84,6 +85,7 @@ async function resolveSessionById(sessionId) {
   if (!session) return null;
   if (session.revokedAt) return null;
   if (session.expiresAt < new Date()) return null;
+  if (session.user.removedAt) return null;
 
   return session;
 }

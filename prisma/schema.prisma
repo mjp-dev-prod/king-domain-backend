@@ -349,6 +349,14 @@ model User {
   /// The last time the person used the app, moved at most every 10 minutes. "Recently active first" (D23).
   lastActiveAt DateTime @default(now())
   savedSearches SavedSearch[]
+
+  // ── S6: where a King Domain agent can reach a person in serious escalations (D35), and removal after a lost chargeback (D36) ──
+  addressLine        String?
+  addressCity        String?
+  addressState       String?
+  addressConfirmedAt DateTime?
+  removedAt          DateTime?
+  removedReason      String?
   /// What money is shown in, marked "about" when it is not the job's own currency (D37).
   displayCurrency String @default("NGN")
   savedTalents  SavedTalent[] @relation("SavedByClient")
@@ -530,6 +538,8 @@ model Job {
   liveAt       DateTime?
   reopenedAt   DateTime?
   invitations  Invitation[]
+  /// A failed job reopens to the other applicants as a new post (D20); the old one keeps its money trail.
+  reopenedFromId String?
 
   @@index([category])
   @@index([postStatus, liveAt])
@@ -590,6 +600,8 @@ enum ContractStatus {
   /// resubmit clock. Stage 2 only enters it; stage 3 builds the screen that
   /// resolves it.
   disputed
+  /// Ended by agreement, a ruling or a cancel-for-refund: money was split or returned. Contract.settlement says how.
+  resolved
   approved
 }
 
@@ -681,6 +693,17 @@ model Contract {
   upfrontPaidAt         DateTime?
   startProofItems       StartProofItem[]
   drafts                ContractDraft[]
+
+  // ── S6: disputes, settlement, chargebacks (PRD §3.3, §4.9; D33 to D36) ──
+  /// Set while a dispute is open: every clock that would pay, escalate or grant on silence waits.
+  disputeHoldAt       DateTime?
+  /// Money moves once: claimed first, then each leg (talent payout, client refund) records itself here and a retry resumes.
+  /// {kind, trigger, talentPercent, talentAmount, clientRefund, talentTransferCode, talentPaidAt, refundId, refundStatus, refundedAt, disputeId}
+  settlement          Json?
+  settlementClaimedAt DateTime?
+  settledAt           DateTime?
+  disputes            Dispute[]
+  chargebacks         Chargeback[]
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
 
@@ -1323,4 +1346,114 @@ model ContractDraft {
 
   @@index([contractId, createdAt])
   @@map("contract_drafts")
+}
+
+// ── S6: disputes ────
+
+/// Something's wrong: the staircase (D33). The two sides try fixed ways out with 48-hour clocks; either can escalate,
+/// silence escalates, and King Domain rules within 5 days, free, final (D34).
+model Dispute {
+  id            String   @id @default(uuid())
+  contractId    String
+  contract      Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  jobId         String
+  /// null for one the system opened (change round 2 refused, resubmit clock missed).
+  filedById     String?
+  filedByRole   String
+  problem       String
+  note          String   @default("")
+  /// open (finding a way out), escalated (with the team), resolved (agreed or ruled), withdrawn.
+  status        String   @default("open")
+  escalatedAt   DateTime?
+  escalatedById String?
+  /// requested, unanswered or system.
+  escalationReason String?
+  /// escalatedAt + 5 days.
+  rulingDueAt   DateTime?
+  resolvedAt    DateTime?
+  /// {by: "agreement" | "ruling", kind, talentPercent}
+  resolution    Json?
+  /// The user who lost, when someone did (a split away from 50/50); feeds the repeat-filer flag and Proven.
+  loserId       String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  proposals DisputeProposal[]
+  ruling    DisputeRuling?
+
+  @@index([status, rulingDueAt])
+  @@index([contractId])
+  @@index([filedById])
+  @@map("disputes")
+}
+
+/// A fixed way out, offered by one side. 48 hours to answer; silence moves it to the team.
+model DisputeProposal {
+  id           String   @id @default(uuid())
+  disputeId    String
+  dispute      Dispute  @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  proposedById String
+  /// more_time, extra_revision, split, cancel or carry_on.
+  kind         String
+  /// more_time: {days}. split: {talentPercent}. cancel: {} (full refund of what is held).
+  params       Json?
+  note         String   @default("")
+  /// pending, accepted, declined, expired.
+  status       String   @default("pending")
+  answerDueAt  DateTime
+  answeredAt   DateTime?
+  createdAt    DateTime @default(now())
+
+  @@index([disputeId, status])
+  @@index([status, answerDueAt])
+  @@map("dispute_proposals")
+}
+
+/// The team's decision, with written reasons shown to both sides. Above ₦100,000 a second person approves it (D44).
+model DisputeRuling {
+  id            String   @id @default(uuid())
+  disputeId     String   @unique
+  dispute       Dispute  @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  decidedById   String
+  /// release, refund or split.
+  outcome       String
+  talentPercent Int
+  reasons       String
+  talentAmount  Decimal  @db.Decimal(12, 2)
+  clientRefund  Decimal  @db.Decimal(12, 2)
+  /// pending_approval or final.
+  status        String
+  approvedById  String?
+  approvedAt    DateTime?
+  createdAt     DateTime @default(now())
+
+  @@map("dispute_rulings")
+}
+
+/// A card chargeback raised by a client's bank. 16 working hours to answer or it is accepted for us (Paystack).
+model Chargeback {
+  id                String    @id @default(uuid())
+  paystackDisputeId String    @unique
+  reference         String?
+  contractId        String?
+  contract          Contract? @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  amountKobo        Int
+  /// open, responded, won or lost.
+  status            String    @default("open")
+  dueAt             DateTime?
+  bin               String?
+  last4             String?
+  customerEmail     String?
+  receivedAt        DateTime  @default(now())
+  respondedAt       DateTime?
+  respondedById     String?
+  resolution        String?
+  responseNote      String?
+  /// The client was removed after a lost chargeback on approved work (D36).
+  clientRemovedAt   DateTime?
+  raw               Json?
+  updatedAt         DateTime  @updatedAt
+
+  @@index([status, dueAt])
+  @@map("chargebacks")
 }

@@ -43,10 +43,22 @@ function fakeProvider({ refusePayouts = false, transferStatus = "success", trans
   const transfers = new Map();
   const payouts = [];
   const initialised = [];
-  return {
+  const refunds = [];
+  const api = {
     transfers,
     payouts,
     initialised,
+    refunds,
+    refuseRefunds: false,
+    // POST /refund and GET /refund?reference= (paystack.com/docs/api/refund): amounts in kobo, queued as pending.
+    createRefund: async ({ reference, amountNaira }) => {
+      if (refundsRefused()) throw new Error("Refund can't be created right now");
+      const r = { id: 9000 + refunds.length, reference, amountKobo: Math.round(Number(amountNaira) * 100), status: "pending" };
+      refunds.push(r);
+      return { id: r.id, status: r.status, amountKobo: r.amountKobo, expectedAt: null };
+    },
+    listRefunds: async (reference) => refunds.filter((r) => r.reference === reference),
+    chargebackCalls: [],
     // DELETE /transferrecipient/:code (paystack.com/docs/api/transfer-recipient): sets it inactive.
     deletedRecipients: [],
     refuseRecipientDelete: false,
@@ -62,6 +74,10 @@ function fakeProvider({ refusePayouts = false, transferStatus = "success", trans
     },
     verifyTransaction: async (ref) => transactions[ref] ?? { status: "abandoned", reference: ref, amountKobo: 0 },
   };
+  return api;
+  function refundsRefused() {
+    return api.refuseRefunds;
+  }
 }
 
 /** The same fake, served over HTTP so the real src/paystack.js client runs against it. */
@@ -89,6 +105,16 @@ function serveFakeProvider(provider) {
       // Bank lookups for the payout-account routes. `provider.accountName` is who the account belongs to.
       if (url.pathname === "/bank/resolve") {
         return send(200, { status: true, data: { account_number: url.searchParams.get("account_number"), account_name: provider.accountName ?? "Suite Talent" } });
+      }
+      if (req.method === "POST" && url.pathname === "/refund") {
+        if (provider.refuseRefunds) return send(400, { status: false, message: "Refund can't be created right now" });
+        const r = { id: 9000 + provider.refunds.length, reference: body.transaction, amountKobo: body.amount, status: "pending" };
+        provider.refunds.push(r);
+        return send(200, { status: true, data: { id: r.id, status: r.status, amount: r.amountKobo, expected_at: null } });
+      }
+      if (req.method === "GET" && url.pathname === "/refund") {
+        const ref = url.searchParams.get("reference");
+        return send(200, { status: true, data: provider.refunds.filter((r) => r.reference === ref).map((r) => ({ id: r.id, status: r.status, amount: r.amountKobo })) });
       }
       if (url.pathname === "/bank") return send(200, { status: true, data: [{ name: "Test Bank", code: "058" }] });
       if (req.method === "POST" && url.pathname === "/transferrecipient") {

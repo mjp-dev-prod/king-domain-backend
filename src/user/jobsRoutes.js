@@ -158,6 +158,12 @@ async function serializeContract(contract) {
     startProofDueAt: contract.startProofDueAt ?? null,
     upfrontAmount: contract.upfrontAmount?.toString() ?? null,
     upfrontPaidAt: contract.upfrontPaidAt ?? null,
+    // S6: a dispute holds the clocks; a settlement says how the money ended.
+    disputeOpen: Boolean(contract.disputeHoldAt),
+    settledAt: contract.settledAt ?? null,
+    settlement: contract.settlement
+      ? { kind: contract.settlement.kind, talentAmount: contract.settlement.talentAmount ?? null, clientRefund: contract.settlement.clientRefund ?? null, talentPercent: contract.settlement.talentPercent ?? null }
+      : null,
     deliverableNote: contract.deliverableNote,
     deliverableUrl: contract.deliverableUrl,
     deliverableFileUrl: contract.deliverableFilePath
@@ -551,6 +557,10 @@ function requireContractStatus(statuses) {
         error: `Contract must be '${allowed.join("' or '")}' for this action (currently '${req.contract.status}').`,
       });
     }
+    // While something is wrong, nothing moves money or clocks except the way out (S6).
+    if (req.contract.disputeHoldAt) {
+      return res.status(409).json({ error: "There's a dispute open on this job. Settle it first.", code: "dispute_open" });
+    }
     next();
   };
 }
@@ -645,6 +655,7 @@ router.post(
 );
 
 router.post("/:id/contract/extension", loadContractForJob, requireAwardedTalent, async (req, res) => {
+  if (req.contract.disputeHoldAt) return res.status(409).json({ error: "There's a dispute open on this job. Ask for more time there.", code: "dispute_open" });
   const result = await extensions.requestExtension({
     contractId: req.contract.id,
     days: Number(req.body?.days),
@@ -656,6 +667,7 @@ router.post("/:id/contract/extension", loadContractForJob, requireAwardedTalent,
 
 router.post("/:id/contract/extension/:extensionId/answer", loadContractForJob, requireClient, async (req, res) => {
   if (req.job.clientId !== req.user.id) return res.status(403).json({ error: "Not your job." });
+  if (req.contract.disputeHoldAt) return res.status(409).json({ error: "There's a dispute open on this job.", code: "dispute_open" });
   const decision = req.body?.decision;
   if (decision !== "grant" && decision !== "decline") {
     return res.status(400).json({ error: "decision must be 'grant' or 'decline'." });

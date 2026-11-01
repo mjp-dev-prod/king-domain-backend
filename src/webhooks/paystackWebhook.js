@@ -45,6 +45,10 @@ router.post("/", express.raw({ type: "application/json" }), async (req, res) => 
   try {
     if (event.event === "charge.success") {
       await confirmFunding({ reference: event.data.reference, amountKobo: event.data.amount, source: "webhook" });
+    } else if (event.event === "charge.dispute.create" || event.event === "charge.dispute.remind" || event.event === "charge.dispute.resolve") {
+      await require("../chargebacks").receive(event);
+    } else if (event.event === "refund.processed" || event.event === "refund.failed") {
+      await require("../refunds").record(event);
     } else if (event.event === "transfer.success") {
       console.log(`paystackWebhook: payout delivered reference=${event.data.reference} amount=${event.data.amount}`);
     } else if (event.event === "transfer.failed" || event.event === "transfer.reversed") {

@@ -8,6 +8,7 @@ const { rateLimit } = require("../admin/rateLimit");
 const storage = require("../storage");
 const sp = require("../startProof");
 const fx = require("../fx");
+const featureFlags = require("../featureFlags");
 const { skillByKey } = require("../skills");
 const { recordEvent } = require("../contractCore");
 const { notify } = require("../discovery");
@@ -35,6 +36,9 @@ const talentOnly = (req, res, next) => (req.isTalent ? next() : res.status(403).
 const clientOnly = (req, res, next) => (req.isClient ? next() : res.status(403).json({ error: "Only the client on this job can do that." }));
 
 const reply = (res, r, ok = (x) => x, status = 200) => (r.ok === false ? res.status(r.status).json({ error: r.error, code: r.code, missing: r.missing }) : res.status(status).json(ok(r)));
+
+/** Which job types and currencies can be paid for today, so the app doesn't offer what the server will refuse. */
+router.get("/availability", (req, res) => res.json(featureFlags.availability()));
 
 // ── The start proof ──────────────────────────────────────
 

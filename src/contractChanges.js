@@ -168,6 +168,8 @@ async function escalateContract(prisma, mailer, { contract, from, reason, note, 
   if (!committed) return refuse(409, "conflict", "This contract just changed. Refresh and try again.");
 
   console.error(`DISPUTE NEEDS ADMIN contract=${contract.id} job=${contract.jobId} reason=${reason}`);
+  // The team's case: opened already escalated, with the 5-day clock (S6). The two sides can still agree a way out.
+  await require("./disputes").openSystemDispute({ contractId: contract.id, reason }, { prisma }).catch((err) => console.error(`changes: could not open the dispute case for contract=${contract.id}: ${err.message}`));
   const { job, client, talent } = await parties(prisma, contract);
   const owners = await prisma.adminUser.findMany({ where: { role: "owner", status: "active" } });
   await Promise.allSettled([
@@ -183,7 +185,7 @@ async function sweepChanges(deps) {
   const { prisma, mailer, now } = baseDeps(deps);
   const at = now();
   const due = await prisma.contract.findMany({
-    where: { status: "changesRequested", changeDueAt: { lte: at } },
+    where: { status: "changesRequested", changeDueAt: { lte: at }, disputeHoldAt: null },
     include: { job: true },
   });
   let escalated = 0;

@@ -259,6 +259,9 @@ router.post(
     if (!user || !(await auth.verifyPassword(user.passwordHash, password))) {
       return res.status(401).json({ error: "Incorrect email or password." });
     }
+    if (user.removedAt) {
+      return res.status(403).json({ error: "This account has been removed. If you think that's a mistake, write to the team.", code: "removed" });
+    }
 
     const tokens = await issueTokens(user.id, req.get("user-agent"));
     return res.json({ user: publicUser(user), ...tokens });

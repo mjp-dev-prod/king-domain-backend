@@ -154,6 +154,40 @@ const QUEUES = [
     },
   },
   {
+    key: "dispute",
+    label: "Disputes",
+    capability: "disputes",
+    path: "/disputes",
+    // The promise to both sides: a free ruling with written reasons within 5 days (D33).
+    defaultTargetMinutes: 5 * 24 * 60,
+    defaultWhenLate: "Both people keep waiting, the money stays held and the clocks stay paused.",
+    async openSince(db) {
+      const rows = await db.dispute.findMany({ where: { status: "escalated" }, select: { escalatedAt: true } });
+      return rows.map((r) => r.escalatedAt);
+    },
+    async resolvedDurationsMs(db) {
+      const rows = await db.dispute.findMany({ where: { status: "resolved", escalatedAt: { not: null }, resolvedAt: { not: null }, resolution: { path: ["by"], equals: "ruling" } }, select: { escalatedAt: true, resolvedAt: true }, orderBy: { resolvedAt: "desc" }, take: RESOLVED_SAMPLE });
+      return rows.map((r) => r.resolvedAt.getTime() - r.escalatedAt.getTime());
+    },
+  },
+  {
+    key: "chargeback",
+    label: "Chargebacks",
+    capability: "finance",
+    path: "/chargebacks",
+    // Paystack gives 16 weekday hours (960 minutes); after that it is accepted for us and cannot be undone.
+    defaultTargetMinutes: 8 * 60,
+    defaultWhenLate: "At 16 weekday hours Paystack accepts the chargeback for us and takes the amount from the next payout.",
+    async openSince(db) {
+      const rows = await db.chargeback.findMany({ where: { status: "open" }, select: { receivedAt: true } });
+      return rows.map((r) => r.receivedAt);
+    },
+    async resolvedDurationsMs(db) {
+      const rows = await db.chargeback.findMany({ where: { status: { not: "open" }, respondedAt: { not: null } }, select: { receivedAt: true, respondedAt: true }, orderBy: { respondedAt: "desc" }, take: RESOLVED_SAMPLE });
+      return rows.map((r) => r.respondedAt.getTime() - r.receivedAt.getTime());
+    },
+  },
+  {
     key: "start-proof",
     label: "Start proof objections",
     capability: "disputes",

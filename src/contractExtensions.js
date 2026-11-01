@@ -133,7 +133,7 @@ async function sweepExtensions(deps) {
   const { prisma, mailer, now } = baseDeps(deps);
   const at = now();
   const due = await prisma.contract.findMany({
-    where: { extensions: { some: { status: "pending", answerDueAt: { lte: at } } } },
+    where: { disputeHoldAt: null, extensions: { some: { status: "pending", answerDueAt: { lte: at } } } },
     select: { id: true },
   });
   let autoGranted = 0;
@@ -185,6 +185,7 @@ async function sweepOverdue(deps) {
   const due = await prisma.contract.findMany({
     where: {
       status: { in: OPEN_STATUSES },
+      disputeHoldAt: null,
       overdueFlaggedAt: null,
       deliverByAt: { lte: cutoff },
       extensions: { none: { status: "pending" } },
