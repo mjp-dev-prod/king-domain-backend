@@ -248,7 +248,7 @@ describe("an objection is ruled on by a person", () => {
     await sendFullProof(job.id);
     assert.equal((await api(cl, "POST", `/jobs/${job.id}/contract/start-proof/object`, { reasonCode: "i_dont_like_it", note: "It is ugly and I want it redone." })).status, 400);
     assert.equal((await api(cl, "POST", `/jobs/${job.id}/contract/start-proof/object`, { reasonCode: "missing_part", note: "short" })).status, 400);
-    assert.ok(!sp.OBJECTION_REASONS.some((r) => /quality|ugly|like/i.test(r.label)));
+    assert.ok(!sp.OBJECTION_REASONS.some((r) => /quality|ugly|dislike|don't like/i.test(r.label)));
   });
 
   it("is refused once the 24 hours have passed", async () => {

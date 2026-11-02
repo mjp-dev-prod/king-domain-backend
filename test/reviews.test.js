@@ -149,7 +149,9 @@ describe("hidden until both are in, then locked", () => {
     assert.equal((await api(ca, "POST", `/jobs/${job.id}/review/reply`, { text: "And one more thing to add." })).json.code, "already_replied");
     const seen = (await api(cl, "GET", `/jobs/${job.id}/review`)).json.review;
     assert.equal(seen.theirs.answers.recommend, true);
-    assert.equal((await api(ca, "GET", `/jobs/${job.id}/review`)).json.review.mine.reply, "Thank you, glad it worked out.");
+    // The reply sits on the review it answers: the talent sees it on the client's review, the client on their own.
+    assert.equal((await api(ca, "GET", `/jobs/${job.id}/review`)).json.review.theirs.reply, "Thank you, glad it worked out.");
+    assert.equal((await api(cl, "GET", `/jobs/${job.id}/review`)).json.review.mine.reply, "Thank you, glad it worked out.");
   });
 
   it("a stranger can't read or write", async () => {
@@ -223,7 +225,9 @@ describe("Proven", () => {
   });
 
   it("is lost when one client doesn't recommend, or a dispute is lost, or a job is late", async () => {
-    const js = await prisma.review.findMany({ where: { subjectId: ctx.talentA.id } });
+    // Only this suite's jobs: the test database keeps reviews from earlier runs.
+    const ours = (await prisma.job.findMany({ where: { title: { startsWith: h.TITLE_PREFIX } }, select: { id: true } })).map((j) => j.id);
+    const js = await prisma.review.findMany({ where: { subjectId: ctx.talentA.id, jobId: { in: ours } } });
     await prisma.review.update({ where: { id: js[0].id }, data: { answers: { ...js[0].answers, recommend: false } } });
     assert.equal((await rep.provenState(ctx.talentA.id, "graphic-design")).proven, false);
     await prisma.review.update({ where: { id: js[0].id }, data: { answers: { ...js[0].answers, recommend: true } } });

@@ -116,6 +116,19 @@ function serveFakeProvider(provider) {
         const ref = url.searchParams.get("reference");
         return send(200, { status: true, data: provider.refunds.filter((r) => r.reference === ref).map((r) => ({ id: r.id, status: r.status, amount: r.amountKobo })) });
       }
+      // POST /transfer pays a talent out of the balance; GET /transfer/verify/:ref answers a retry (404 when there is none).
+      if (req.method === "POST" && url.pathname === "/transfer") {
+        if (provider.transfers.has(body.reference)) return send(400, { status: false, message: "Please provide a unique reference. Reference already exists on a transfer" });
+        const t = { transferCode: `TRF_${body.reference}`, status: "success" };
+        provider.transfers.set(body.reference, t);
+        provider.payouts.push({ reference: body.reference, amountNaira: Number(body.amount) / 100 });
+        return send(200, { status: true, data: { transfer_code: t.transferCode, status: t.status } });
+      }
+      const verifyTransfer = url.pathname.match(/^\/transfer\/verify\/(.+)$/);
+      if (req.method === "GET" && verifyTransfer) {
+        const t = provider.transfers.get(decodeURIComponent(verifyTransfer[1]));
+        return t ? send(200, { status: true, data: { transfer_code: t.transferCode, status: t.status } }) : send(404, { status: false, message: "Transfer not found" });
+      }
       if (url.pathname === "/bank") return send(200, { status: true, data: [{ name: "Test Bank", code: "058" }] });
       if (req.method === "POST" && url.pathname === "/transferrecipient") {
         return send(200, { status: true, data: { recipient_code: `RCP_${body.account_number}` } });

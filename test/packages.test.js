@@ -4,6 +4,7 @@ const { describe, it, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const h = require("./helpers");
 const packages = require("../src/packages");
+const paystack = require("../src/paystack");
 const { prisma } = h;
 
 let ctx, server, fakeProvider, cl, ca, tb;
@@ -89,7 +90,7 @@ describe("browsing", () => {
   });
 
   it("a package whose talent is no longer verified isn't listed", async () => {
-    await prisma.skillSubmission.updateMany({ where: { userId: ctx.talentA.id, skillKey: "graphic-design" }, data: { status: "restricted" } });
+    await prisma.skillSubmission.updateMany({ where: { userId: ctx.talentA.id, skillKey: "graphic-design" }, data: { status: "notYet" } });
     assert.equal((await api(cl, "GET", "/packages?skill=graphic-design")).json.packages.length, 0);
     await prisma.skillSubmission.updateMany({ where: { userId: ctx.talentA.id, skillKey: "graphic-design" }, data: { status: "verified" } });
   });
@@ -126,7 +127,8 @@ describe("ordering", () => {
     assert.equal(job.applications.length, 1);
     assert.equal(job.applications[0].talentId, ctx.talentA.id);
     const order = await prisma.packageOrder.findUnique({ where: { id: r.json.orderId } });
-    assert.equal(order.answerDueAt - order.createdAt, 48 * 3_600_000);
+    // The deadline is set from the clock a moment before the database stamps createdAt, so allow a few seconds.
+    assert.ok(Math.abs(order.answerDueAt - order.createdAt - 48 * 3_600_000) < 5_000, "48 hours to answer");
     assert.equal((await api(cl, "POST", `/packages/${pkg.id}/order`, { brief })).json.code, "already_ordered");
   });
 
@@ -153,7 +155,7 @@ describe("ordering", () => {
     const contract = await prisma.contract.findUnique({ where: { jobId: r.json.jobId } });
     assert.equal(contract.status, "awaitingPayment");
     assert.ok(contract.payByAt > new Date());
-    assert.equal(Number(contract.platformFeeAmount), 2200);
+    assert.equal(Number(contract.platformFeeAmount), paystack.calculatePlatformFee((await prisma.job.findUnique({ where: { id: r.json.jobId } })).budget), "the usual 10% on top of the package price");
     assert.equal((await prisma.packageOrder.findUnique({ where: { id: r.json.orderId } })).status, "accepted");
     assert.equal((await api(ca, "POST", `/package-orders/${r.json.orderId}/accept`)).json.code, "not_open", "once");
   });

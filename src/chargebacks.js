@@ -22,7 +22,8 @@ const lagosDay = (d) => new Date(d.getTime() + LAGOS_OFFSET_H * 3_600_000).getUT
  */
 function addWeekdayHours(start, hours = HOURS_TO_ANSWER) {
   let t = new Date(start.getTime());
-  let left = hours * 60; // minutes
+  // Milliseconds, not whole minutes: rounding the time left in a day could land on 0 just short of midnight and never move on.
+  let left = hours * 3_600_000;
   while (left > 0) {
     const day = lagosDay(t);
     if (day === 0 || day === 6) {
@@ -34,13 +35,13 @@ function addWeekdayHours(start, hours = HOURS_TO_ANSWER) {
       t = new Date(lagos.getTime() - LAGOS_OFFSET_H * 3_600_000);
       continue;
     }
-    // Minutes until the end of this Lagos weekday.
+    // Time until the end of this Lagos weekday: always more than zero, since `lagos` is before the next midnight.
     const lagos = new Date(t.getTime() + LAGOS_OFFSET_H * 3_600_000);
     const endOfDay = new Date(lagos);
     endOfDay.setUTCHours(24, 0, 0, 0);
-    const room = Math.round((endOfDay.getTime() - lagos.getTime()) / 60_000);
+    const room = endOfDay.getTime() - lagos.getTime();
     const step = Math.min(room, left);
-    t = new Date(t.getTime() + step * 60_000);
+    t = new Date(t.getTime() + step);
     left -= step;
   }
   return t;

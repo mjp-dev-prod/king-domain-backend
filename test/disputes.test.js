@@ -328,6 +328,17 @@ describe("chargebacks", () => {
     assert.equal(chargebacks.addWeekdayHours(monday, 16).toISOString(), "2026-11-03T00:00:00.000Z");
   });
 
+  it("always finishes, whatever second it starts on (a rounding slip once looped forever just before midnight)", () => {
+    // Monday 13:56:35.123 UTC is 14:56:35.123 Lagos: 9h03m24.877s of Monday, the rest on Tuesday.
+    assert.equal(chargebacks.addWeekdayHours(new Date("2026-11-02T13:56:35.123Z"), 16).toISOString(), "2026-11-03T05:56:35.123Z");
+    for (let sec = 0; sec < 60; sec += 7) {
+      for (const ms of [0, 1, 499, 500, 999]) {
+        const start = new Date(Date.UTC(2026, 10, 3, 10, 14, sec, ms)); // a Tuesday: no weekend in the way
+        assert.equal(chargebacks.addWeekdayHours(start, 16).getTime() - start.getTime(), 16 * 3_600_000, `from :${sec}.${ms}`);
+      }
+    }
+  });
+
   it("is recorded when it arrives, linked to its contract, and the team is alerted", async () => {
     const { c } = await working({ contract: { paystackReference: "kd_cb_ref_1" } });
     const r = await chargebacks.receive({ event: "charge.dispute.create", data: { id: "testsuite-1", transaction: { reference: "kd_cb_ref_1", amount: 1100000 }, bin: "408408", last4: "4081", customer: { email: "c@example.com" } } }, { prisma });
