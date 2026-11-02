@@ -1020,6 +1020,8 @@ model SubmissionPiece {
   /// When it was made, as the person writes it ("March 2026").
   madeOn       String          @default("")
   liveLink     String          @default("")
+  /// A link that shows how the piece was made: a repository, a Figma file, a shared document (decision 2026-11-02: "show how it was made").
+  processLink  String          @default("")
   files        SubmissionFile[]
 
   @@index([submissionId])

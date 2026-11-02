@@ -83,7 +83,7 @@ async function buildReady(tok, seed = 1, skill = SKILL) {
 const scores = (n, over = {}) => ({ structure: n, pacing: n, sound: n, picture: n, text: n, brief: n, export: n, ...over });
 const pass = { scores: scores(3), verdict: "pass", comment: "" };
 const notYet = (comment = "The dialogue is buried under the music.") => ({ scores: scores(3, { sound: 1, text: 2 }), verdict: "notYet", comment });
-const allChecked = { walkthrough: true, working: true, drafts: true, elsewhere: true };
+const allChecked = { walkthrough: true, howMade: true, elsewhere: true };
 const checkerPass = (id) => api(checkerTok, "POST", `/admin/authenticity/${id}/pass`, { checklist: allChecked, note: "Looks genuine." });
 
 describe("the hub", () => {

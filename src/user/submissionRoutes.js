@@ -120,6 +120,7 @@ function pieceFields(b) {
   if (typeof b.role === "string") out.role = cleaned(b.role, 120);
   if (typeof b.madeOn === "string") out.madeOn = cleaned(b.madeOn, 60);
   if (typeof b.liveLink === "string") out.liveLink = cleaned(b.liveLink, 300);
+  if (typeof b.processLink === "string") out.processLink = cleaned(b.processLink, 300);
   return out;
 }
 
@@ -129,6 +130,7 @@ router.post("/me/submissions/:id/pieces", requireUser, talentOnly, ownSubmission
   if (req.submission.pieces.length >= rules.MAX_PIECES) return res.status(400).json({ error: `Send at most ${rules.MAX_PIECES} pieces.`, code: "too_many_pieces" });
   const fields = pieceFields(req.body ?? {});
   if (!validLink(fields.liveLink)) return res.status(400).json({ error: "The live link must start with http:// or https://." });
+  if (!validLink(fields.processLink)) return res.status(400).json({ error: "The link that shows how it was made must start with http:// or https://." });
   const position = req.submission.pieces.reduce((m, p) => Math.max(m, p.position), 0) + 1;
   await prisma.submissionPiece.create({ data: { submissionId: req.submission.id, position, ...fields } });
   return respond(res, req.submission.id, 201);
@@ -139,6 +141,7 @@ router.patch("/me/submissions/:id/pieces/:pieceId", requireUser, talentOnly, own
   if (!piece) return res.status(404).json({ error: "Piece not found." });
   const fields = pieceFields(req.body ?? {});
   if (!validLink(fields.liveLink)) return res.status(400).json({ error: "The live link must start with http:// or https://." });
+  if (!validLink(fields.processLink)) return res.status(400).json({ error: "The link that shows how it was made must start with http:// or https://." });
   await prisma.submissionPiece.update({ where: { id: piece.id }, data: fields });
   return respond(res, req.submission.id);
 });

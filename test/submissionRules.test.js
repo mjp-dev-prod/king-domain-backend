@@ -109,7 +109,17 @@ describe("readiness", () => {
   it("says exactly what is missing", () => {
     const r = rules.readiness(sub({ pieces: [piece()], files: [], declaredOwnWork: false }), { hadEarlierAttempt: false });
     const missing = r.items.filter((i) => !i.done).map((i) => i.key);
-    assert.deepEqual(missing, ["pieces", "working", "drafts", "walkthrough", "declaration"]);
+    assert.deepEqual(missing, ["pieces", "howMade", "walkthrough", "declaration"]);
+  });
+
+  it("how it was made can be a working file, a draft or just a link, on any one piece", () => {
+    const plain = [piece(), piece()];
+    const missing = (pieces) => rules.readiness(sub({ pieces }), { hadEarlierAttempt: false }).items.find((i) => i.key === "howMade").done;
+    assert.equal(missing(plain), false, "nothing shows how it was made");
+    assert.equal(missing([piece({ files: [file("output"), file("working")] }), piece()]), true, "a screenshot or file, filed as working");
+    assert.equal(missing([piece({ files: [file("output"), file("draft")] }), piece()]), true, "an earlier version");
+    assert.equal(missing([piece({ processLink: "https://github.com/me/site" }), piece()]), true, "a repository link and nothing else");
+    assert.equal(missing([piece({ files: [file("output"), { role: "working", status: "pending" }] }), piece()]), false, "a file that didn't finish uploading doesn't count");
   });
 
   it("a live link counts as the finished work, a declared AI use needs a note, and a second attempt needs the terms", () => {

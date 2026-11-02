@@ -27,8 +27,7 @@ reviewRouter.use(requireCapability("reviewer"));
 /** What a checker confirms before work goes to reviewers. All must be true to pass. */
 const AUTH_CHECKLIST = [
   { key: "walkthrough", label: "The walkthrough shows the person explaining this work as theirs." },
-  { key: "working", label: "The working files are consistent with the finished work." },
-  { key: "drafts", label: "The drafts show the work developing, not appearing finished." },
+  { key: "howMade", label: "What shows how it was made (files, screenshots, recordings or a link) fits the finished work and the walkthrough." },
   { key: "elsewhere", label: "Nothing here is found published by someone else (reverse image or text search)." },
 ];
 
@@ -51,7 +50,7 @@ async function filesWithLinks(files) {
 async function workOf(s) {
   const files = await filesWithLinks(s.files.filter((f) => f.status === "ready"));
   return {
-    pieces: s.pieces.map((p) => ({ id: p.id, title: p.title, brief: p.brief, role: p.role, madeOn: p.madeOn, liveLink: p.liveLink, files: files.filter((f) => f.pieceId === p.id) })),
+    pieces: s.pieces.map((p) => ({ id: p.id, title: p.title, brief: p.brief, role: p.role, madeOn: p.madeOn, liveLink: p.liveLink, processLink: p.processLink ?? "", files: files.filter((f) => f.pieceId === p.id) })),
     walkthrough: files.filter((f) => !f.pieceId),
     declaration: { ownWork: s.declaredOwnWork, aiUsed: s.aiUsed, aiNote: s.aiNote },
   };

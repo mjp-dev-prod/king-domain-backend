@@ -91,11 +91,13 @@ async function serialiseSubmission(db, s) {
       role: p.role,
       madeOn: p.madeOn,
       liveLink: p.liveLink,
+      processLink: p.processLink ?? "",
       files: s.files.filter((f) => f.pieceId === p.id).map(serialiseFile),
     })),
     walkthrough: s.files.filter((f) => !f.pieceId && f.role === "walkthrough").map(serialiseFile),
     readiness,
     limits: { minPieces: rules.MIN_PIECES, maxPieces: rules.MAX_PIECES, files: Object.fromEntries(Object.entries(FILE_RULES).map(([k, v]) => [k, { maxBytes: v.maxBytes, types: v.types }])) },
+    howMade: skill?.howMade ?? null,
     rubric: rubric ? { draft: rubric.draft, scale: SCALE, lines: rubric.lines } : null,
     result: resultOf(s),
   };

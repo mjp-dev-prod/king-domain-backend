@@ -86,13 +86,14 @@ function isRepeatOfRejected(outputEtags, earlierRejectedEtags) {
 function readiness(submission, { hadEarlierAttempt }) {
   const pieces = submission.pieces ?? [];
   const done = (p) => Boolean(p.title?.trim() && p.brief?.trim() && p.role?.trim() && p.madeOn?.trim());
+  const showsHowMade = (p) => Boolean(p.processLink?.trim()) || p.files.some((f) => (f.role === "working" || f.role === "draft") && f.status === "ready");
   const hasOutput = (p) => p.files.some((f) => f.role === "output" && f.status === "ready") || Boolean(p.liveLink?.trim());
   const items = [
     { key: "pieces", label: `${MIN_PIECES} or ${MAX_PIECES} pieces of real work`, done: pieces.length >= MIN_PIECES && pieces.length <= MAX_PIECES },
     { key: "details", label: "Each piece: title, the brief, your role and when", done: pieces.length > 0 && pieces.every(done) },
     { key: "outputs", label: "Each piece: the finished work or a live link", done: pieces.length > 0 && pieces.every(hasOutput) },
-    { key: "working", label: "Working files for at least one piece", done: pieces.some((p) => p.files.some((f) => f.role === "working" && f.status === "ready")) },
-    { key: "drafts", label: "Drafts for at least one piece", done: pieces.some((p) => p.files.some((f) => f.role === "draft" && f.status === "ready")) },
+    // One plain requirement instead of two jargon ones (decision 2026-11-02): anything that shows the work was made over time.
+    { key: "howMade", label: "Show how at least one piece was made", done: pieces.some(showsHowMade) },
     { key: "walkthrough", label: "A 2 to 3 minute walkthrough video", done: (submission.files ?? []).some((f) => f.role === "walkthrough" && f.status === "ready") },
     { key: "declaration", label: "Your declaration that the work is yours", done: submission.declaredOwnWork === true && (!submission.aiUsed || Boolean(submission.aiNote?.trim())) },
   ];
