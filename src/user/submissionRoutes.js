@@ -10,6 +10,8 @@ const { SKILLS, skillByKey } = require("../skills");
 const storage = require("../storage");
 const rules = require("../submissionRules");
 const sub = require("../submissions");
+const submissionWork = require("../submissionWork");
+const linkPreview = require("../linkPreview");
 
 const router = express.Router();
 
@@ -80,6 +82,22 @@ router.post("/me/skills/:skillKey/submissions", requireUser, talentOnly, async (
 
 router.get("/me/submissions/:id", requireUser, talentOnly, ownSubmission, async (req, res) => {
   res.json({ submission: await sub.serialiseSubmission(prisma, req.submission) });
+});
+
+/**
+ * Everything the person sent, laid out to be looked at: each piece with its files (private links that expire), what each
+ * requirement was for, and plain advice on anything thin. Read-only, and for the owner alone.
+ */
+router.get("/me/submissions/:id/work", requireUser, talentOnly, ownSubmission, async (req, res) => {
+  const ser = await sub.serialiseSubmission(prisma, req.submission);
+  res.json({ work: await submissionWork.buildWork(req.submission, ser) });
+});
+
+/** A preview of a link the person typed (title, description, picture), so they can see what a reviewer will meet. */
+router.get("/link-preview", requireUser, talentOnly, rateLimit({ windowMs: 10 * 60_000, max: 60, key: "link_preview", by: (r) => r.user.id }), async (req, res) => {
+  const url = typeof req.query.url === "string" ? req.query.url.trim().slice(0, 500) : "";
+  if (!url) return res.status(400).json({ error: "Give a link to preview." });
+  res.json({ preview: await linkPreview.preview(url) });
 });
 
 /** Throws a draft away. The row stays (a person's history is never deleted); its files do not. */
