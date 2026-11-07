@@ -33,7 +33,8 @@ async function reset() {
   await prisma.job.deleteMany({ where: { title: { startsWith: h.TITLE_PREFIX } } });
 }
 
-const input = (over = {}) => ({ title: `${h.TITLE_PREFIX}Logo pack`, summary: "A clean logo with two concepts.", included: "Two concepts, one chosen and refined, final files.", formats: "PNG, SVG", quantity: 2, revisions: 2, deliveryDays: 5, price: 20000, ...over });
+const scope = { designKind: "Logo or brand identity", quantity: 2, concepts: 2, files: ["Transparent PNG", "Editable source file"] };
+const input = (over = {}) => ({ title: `${h.TITLE_PREFIX}Logo pack`, summary: "A clean logo with two concepts.", included: "Two concepts, one chosen and refined, final files.", scope, revisions: 2, deliveryDays: 5, price: 20000, ...over });
 
 describe("publishing", () => {
   it("only in a skill the talent is verified in, and only talents", async () => {
@@ -54,16 +55,27 @@ describe("publishing", () => {
     assert.equal(mine.json.packages.length, 3);
     assert.equal(mine.json.packages.find((p) => p.tier === "basic").price, 22000);
     assert.deepEqual(mine.json.skills.map((s) => s.skillKey), ["graphic-design"]);
+    assert.deepEqual(mine.json.skills[0].fields.map((f) => f.key), ["designKind", "quantity", "concepts", "files"], "the skill's own package fields");
+    const basic = mine.json.packages.find((p) => p.tier === "basic");
+    assert.equal(basic.needsUpdate, false);
+    assert.deepEqual(basic.scopeLines.map((l) => [l.label, l.value]), [["What kind of design", "Logo or brand identity"], ["How many designs", "2"], ["First ideas to choose from", "2"], ["Files you get", "Transparent PNG, Editable source file"]]);
   });
 
   it("refuses what the standard fields don't allow, and contact details or outside payment", () => {
-    assert.equal(packages.validatePackage(input({ price: 10 })).field, "price");
-    assert.equal(packages.validatePackage(input({ revisions: 5 })).field, "revisions");
-    assert.equal(packages.validatePackage(input({ deliveryDays: 0 })).field, "deliveryDays");
-    assert.equal(packages.validatePackage(input({ title: "ab" })).field, "title");
-    const flagged = packages.validatePackage(input({ summary: "Call me on 08031234567 and pay outside the app." }));
+    const v = (over) => packages.validatePackage("graphic-design", input(over));
+    assert.equal(v({ price: 10 }).field, "price");
+    assert.equal(v({ revisions: 5 }).field, "revisions");
+    assert.equal(v({ deliveryDays: 0 }).field, "deliveryDays");
+    assert.equal(v({ title: "ab" }).field, "title");
+    const flagged = v({ summary: "Call me on 08031234567 and pay outside the app." });
     assert.equal(flagged.code, "flagged");
-    assert.equal(packages.validatePackage(input()).ok, true);
+    assert.equal(v({}).ok, true);
+    assert.equal(v({ scope: { ...scope, files: [] } }).field, "files", "a design package says which files you get");
+    assert.equal(v({ scope: undefined }).field, "designKind");
+    // A website package is scoped like a website: pages, features, what it is built with. Never "formats or sizes".
+    const web = packages.validatePackage("web-development", input({ scope: { siteKind: "A landing page", pages: 1, features: ["Contact form"], builtWith: "Wix" } }));
+    assert.equal(web.ok, true, JSON.stringify(web));
+    assert.deepEqual(Object.keys(web.value.scope).sort(), ["builtWith", "features", "pages", "products", "siteKind"]);
   });
 
   it("can be paused (and then isn't browsable), and removed", async () => {
@@ -100,15 +112,35 @@ describe("browsing", () => {
     const d = await api(cl, "GET", `/packages/${list[0].id}`);
     assert.equal(d.status, 200, JSON.stringify(d.json));
     const keys = d.json.formFields.map((f) => f.key);
-    assert.ok(!keys.includes("deliverables") && !keys.includes("quantity") && !keys.includes("formats") && !keys.includes("revisionsIncluded"));
+    for (const k of ["deliverables", "revisionsIncluded", "designKind", "quantity", "concepts", "files"]) assert.ok(!keys.includes(k), `the package already says ${k}`);
     assert.ok(keys.includes("usageRights"));
-    assert.ok(keys.includes("dimensions"), "the skill's own fields");
+    assert.ok(keys.includes("dimensions"), "the size is the client's to say");
+    assert.ok(d.json.package.scopeLines.length >= 3, "what the package states, in words");
     assert.ok(d.json.fee > 0);
   });
 });
 
+describe("packages saved before the skill's own fields (2026-11-07)", () => {
+  it("are kept for the talent, marked to update, and hidden from clients until updated", async () => {
+    await reset();
+    await prisma.skillSubmission.create({ data: { userId: ctx.talentA.id, skillKey: "graphic-design", status: "verified", decidedAt: new Date() } }).catch(() => {});
+    const old = await prisma.package.create({ data: { talentId: ctx.talentA.id, skillKey: "graphic-design", tier: "basic", title: `${h.TITLE_PREFIX}Old logo pack`, summary: "A logo the old way.", price: 20000, deliveryDays: 5, revisions: 1, included: "One logo and its files.", quantity: 1, formats: "PNG" } });
+    const mine = (await api(ca, "GET", "/users/me/packages")).json.packages.find((p) => p.id === old.id);
+    assert.equal(mine.needsUpdate, true);
+    assert.deepEqual(mine.scopeLines.map((l) => l.value), ["1", "PNG"], "the old answers still read");
+    assert.ok(!(await api(cl, "GET", "/packages?skill=graphic-design")).json.packages.some((p) => p.id === old.id));
+    assert.equal((await api(cl, "GET", `/packages/${old.id}`)).status, 404);
+    assert.equal((await api(cl, "POST", `/packages/${old.id}/order`, { brief: { usageRights: "organic", dimensions: "A4" } })).status, 404);
+    const saved = await api(ca, "PUT", "/users/me/packages/graphic-design/basic", input({ price: 22000 }));
+    assert.equal(saved.json.package.needsUpdate, false);
+    const row = await prisma.package.findUnique({ where: { id: old.id } });
+    assert.equal(row.formats, null, "updating clears the old answers");
+    assert.ok((await api(cl, "GET", "/packages?skill=graphic-design")).json.packages.some((p) => p.id === old.id));
+  });
+});
+
 describe("ordering", () => {
-  const brief = { usageRights: "organic", dimensions: "1080x1080" };
+  const brief = { usageRights: "organic", dimensions: "1080x1080", quantity: 40 };
 
   async function aPackage() {
     return (await prisma.package.findFirst({ where: { talentId: ctx.talentA.id, tier: "basic" } }));
@@ -123,7 +155,9 @@ describe("ordering", () => {
     assert.equal(Number(job.budget), 22000);
     assert.equal(job.skillKey, "graphic-design");
     assert.equal(job.brief.quantity, 2, "the package's own answers are in the brief");
+    assert.deepEqual(job.brief.files, ["Transparent PNG", "Editable source file"]);
     assert.equal(job.brief.usageRights, "organic");
+    assert.notEqual(job.brief.quantity, 40, "the client can't change what the package states");
     assert.equal(job.applications.length, 1);
     assert.equal(job.applications[0].talentId, ctx.talentA.id);
     const order = await prisma.packageOrder.findUnique({ where: { id: r.json.orderId } });

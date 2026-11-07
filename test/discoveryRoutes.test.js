@@ -11,8 +11,10 @@ let ctx, server, fakeProvider, ca, cl, tc, talentC, tcTok;
 let safety, support, safetyTok, supportTok;
 const admins = [];
 
-const common = { deliverables: "Edit three reels", quantity: 3, formats: "MP4 1080x1920", revisionsIncluded: 1, usageRights: "organic" };
-const videoBrief = { ...common, durationSeconds: 30, aspectRatio: "9:16", rawFootage: "Shared on Drive after award" };
+const common = { deliverables: "Edit three reels", revisionsIncluded: 1 };
+const videoBrief = { ...common, quantity: 3, durationSeconds: 30, aspectRatio: "9:16", rawFootage: "Shared on Drive after award", projectFile: true, usageRights: "organic" };
+const siteBrief = { ...common, siteKind: "A new website", pages: 4, builtWith: "Custom code", contentBy: "A mix", hosting: "Set them up in my name" };
+const writingBrief = { ...common, writingKind: "Website copy", quantity: 5, wordCount: 800, tone: "Friendly", byline: "Mine: written for me, no credit to the talent", deliveredAs: "Word file" };
 const post = (over = {}) => ({ title: `${h.TITLE_PREFIX}Reels for a salon`, description: "Edit three 30 second reels for a hair salon in Yaba.", skillKey: SKILL, jobType: "oneDelivery", brief: videoBrief, price: 25000, currency: "NGN", deliveryDays: 7, screeningQuestions: ["Have you edited reels before?"], ...over });
 
 before(async () => {
@@ -143,11 +145,11 @@ describe("posting a job", () => {
   it("each job type derives its price from its brief", async () => {
     await reset();
     await liveJob();
-    const ms = await api(cl, "POST", "/jobs", post({ skillKey: "web-development", jobType: "milestones", brief: { ...common, pages: 4, milestones: [{ title: "Design", amount: 30000, days: 7 }, { title: "Build", amount: 70000, days: 14 }] }, price: undefined, deliveryDays: undefined }));
+    const ms = await api(cl, "POST", "/jobs", post({ skillKey: "web-development", jobType: "milestones", brief: { ...siteBrief, milestones: [{ title: "Design", amount: 30000, days: 7 }, { title: "Build", amount: 70000, days: 14 }] }, price: undefined, deliveryDays: undefined }));
     assert.equal(ms.status, 201, JSON.stringify(ms.json));
     assert.equal(ms.json.job.budget, "100000");
     assert.equal(ms.json.job.deliveryDays, 21);
-    const hr = await api(cl, "POST", "/jobs", post({ skillKey: "writing", jobType: "hourly", brief: { ...common, wordCount: 800, tone: "Friendly", hourlyRate: 3000, weeklyCapHours: 10, weeks: 4 }, price: undefined, deliveryDays: undefined }));
+    const hr = await api(cl, "POST", "/jobs", post({ skillKey: "writing", jobType: "hourly", brief: { ...writingBrief, hourlyRate: 3000, weeklyCapHours: 10, weeks: 4 }, price: undefined, deliveryDays: undefined }));
     assert.equal(hr.json.job.budget, "30000");
     assert.equal(hr.json.job.jobType, "hourly");
   });

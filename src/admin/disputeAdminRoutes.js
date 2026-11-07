@@ -10,6 +10,7 @@ const disputes = require("../disputes");
 const settlement = require("../settlement");
 const chargebacks = require("../chargebacks");
 const sp = require("../startProof");
+const { describe: describeBrief } = require("../briefs");
 const storage = require("../storage");
 const { skillByKey } = require("../skills");
 
@@ -97,7 +98,7 @@ disputesRouter.get("/:id", async (req, res) => {
     },
     ruling: d.ruling ? { outcome: d.ruling.outcome, talentPercent: d.ruling.talentPercent, reasons: d.ruling.reasons, talentAmount: num(d.ruling.talentAmount), clientRefund: num(d.ruling.clientRefund), status: d.ruling.status, decidedById: d.ruling.decidedById, approvedById: d.ruling.approvedById } : null,
     money: { held, currency: contract.job.currency, upfrontPaid: contract.upfrontPaidAt ? num(contract.upfrontAmount ?? 0) : 0, price: num(contract.job.budget), fee: num(contract.platformFeeAmount ?? 0), secondPersonAbove: disputes.SECOND_PERSON_ABOVE, needsSecondPerson: disputes.needsSecondPerson(held), settlement: contract.settlement ?? null },
-    job: { id: contract.job.id, title: contract.job.title, description: contract.job.description, skill: contract.job.skillKey ? skillByKey(contract.job.skillKey)?.label ?? contract.job.skillKey : null, brief: contract.job.brief ?? null, deliveryDays: contract.job.deliveryDays, type: contract.job.jobType },
+    job: { id: contract.job.id, title: contract.job.title, description: contract.job.description, skill: contract.job.skillKey ? skillByKey(contract.job.skillKey)?.label ?? contract.job.skillKey : null, brief: contract.job.brief ?? null, briefLines: contract.job.skillKey ? describeBrief(contract.job.skillKey, contract.job.jobType, contract.job.brief) : [], deliveryDays: contract.job.deliveryDays, type: contract.job.jobType },
     contract: { id: contract.id, status: contract.status, fundedAt: contract.fundedAt, deliverByAt: contract.deliverByAt, changeRounds: contract.changeRounds, extensionsUsed: contract.extensionsUsed },
     parties: { client: await person(client), talent: await person(talent) },
     proposals: d.proposals.map((p) => ({ id: p.id, by: who(p.proposedById), kind: p.kind, description: disputes.describe(p.kind, p.params ?? {}, contract.job), note: p.note, status: p.status, createdAt: p.createdAt, answerDueAt: p.answerDueAt })),

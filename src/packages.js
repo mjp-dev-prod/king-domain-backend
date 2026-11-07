@@ -11,7 +11,7 @@ const { HOUR } = require("./contractCore");
 
 const TIERS = ["basic", "standard", "premium"];
 const ANSWER_MS = 48 * HOUR;
-const LIMITS = { title: [3, 80], summary: [10, 400], included: [10, 600], formats: [2, 120], price: [1000, 10_000_000], days: [1, 60], quantity: [1, 1000], revisions: [0, 2] };
+const LIMITS = { title: [3, 80], summary: [10, 400], included: [10, 600], price: [1000, 10_000_000], days: [1, 60], revisions: [0, 2] };
 
 const fail = (status, code, error, field) => ({ ok: false, status, code, error, ...(field ? { field } : {}) });
 const categoryLabelOf = (skill) => CATEGORIES.find((c) => c.key === skill.category)?.label ?? skill.category;
@@ -29,29 +29,34 @@ function between(v, [min, max]) {
   return Number.isFinite(v) && v >= min && v <= max;
 }
 
-/** Checks what a talent typed into a package. Contact details and outside payment are caught as everywhere before award (D18). */
-function validatePackage(input) {
+/**
+ * Checks what a talent typed into a package: the shared parts, and the skill's own fields (pages and features for a
+ * website, platforms and posts for social media). Contact details and outside payment are caught as everywhere before
+ * award (D18).
+ */
+function validatePackage(skillKey, input) {
   const str = (v) => (typeof v === "string" ? v.trim() : "");
   const title = str(input?.title);
   const summary = str(input?.summary);
   const included = str(input?.included);
-  const formats = str(input?.formats);
   const price = Number(input?.price);
   const deliveryDays = Number(input?.deliveryDays);
-  const quantity = Number(input?.quantity);
   const revisions = Number(input?.revisions);
   if (!between(title.length, LIMITS.title)) return fail(400, "invalid", `Give it a title of ${LIMITS.title[0]} to ${LIMITS.title[1]} characters.`, "title");
   if (!between(summary.length, LIMITS.summary)) return fail(400, "invalid", `Say what it is in ${LIMITS.summary[0]} to ${LIMITS.summary[1]} characters.`, "summary");
   if (!between(included.length, LIMITS.included)) return fail(400, "invalid", `List what is included in ${LIMITS.included[0]} to ${LIMITS.included[1]} characters.`, "included");
-  if (!between(formats.length, LIMITS.formats)) return fail(400, "invalid", "Say which formats or sizes it comes in.", "formats");
   if (!between(price, LIMITS.price)) return fail(400, "invalid", `The price is between ₦${LIMITS.price[0].toLocaleString("en-NG")} and ₦${LIMITS.price[1].toLocaleString("en-NG")}.`, "price");
   if (!Number.isInteger(deliveryDays) || !between(deliveryDays, LIMITS.days)) return fail(400, "invalid", "Delivery is 1 to 60 days.", "deliveryDays");
-  if (!Number.isInteger(quantity) || !between(quantity, LIMITS.quantity)) return fail(400, "invalid", "How many are included: a whole number.", "quantity");
   if (!Number.isInteger(revisions) || !between(revisions, LIMITS.revisions)) return fail(400, "invalid", "Rounds of changes included: 0, 1 or 2.", "revisions");
-  const flags = safety.detectRisk([title, summary, included, formats].join("\n"));
+  const scope = briefs.validatePackageScope(skillKey, input?.scope);
+  if (!scope.ok) return fail(400, "invalid", scope.error, scope.field);
+  const flags = safety.detectRisk([title, summary, included].join("\n"));
   if (flags.length) return fail(400, "flagged", `Packages can't include contact details, links or payment outside King Domain (${flags.map((f) => f.label.toLowerCase()).join(", ")}).`);
-  return { ok: true, value: { title, summary, included, formats, price, deliveryDays, quantity, revisions } };
+  return { ok: true, value: { title, summary, included, price, deliveryDays, revisions, scope: scope.scope } };
 }
+
+/** A package saved before the skill's own fields existed: kept for its talent, hidden from clients until updated. */
+const needsUpdate = (p) => !p.scope || typeof p.scope !== "object" || Array.isArray(p.scope);
 
 const shape = (p) => ({
   id: p.id,
@@ -65,8 +70,10 @@ const shape = (p) => ({
   deliveryDays: p.deliveryDays,
   revisions: p.revisions,
   included: p.included,
-  quantity: p.quantity,
-  formats: p.formats,
+  scope: needsUpdate(p) ? {} : p.scope,
+  // What the package states, in words, in the order the skill asks it.
+  scopeLines: briefs.describe(p.skillKey, "oneDelivery", needsUpdate(p) ? { quantity: p.quantity ?? undefined, formats: p.formats ?? undefined } : p.scope),
+  needsUpdate: needsUpdate(p),
   status: p.status,
 });
 
@@ -78,7 +85,12 @@ async function mine(userId, deps = {}) {
     prisma.skillSubmission.findMany({ where: { userId, status: "verified" }, select: { skillKey: true } }),
   ]);
   const skills = [...new Set(verified.map((v) => v.skillKey))].filter((k) => skillByKey(k));
-  return { packages: rows.map(shape), skills: skills.map((k) => ({ skillKey: k, label: skillByKey(k).label })), tiers: TIERS, maxPerSkill: TIERS.length };
+  return {
+    packages: rows.map(shape),
+    skills: skills.map((k) => ({ skillKey: k, label: skillByKey(k).label, fields: briefs.packageFields(k) })),
+    tiers: TIERS,
+    maxPerSkill: TIERS.length,
+  };
 }
 
 async function save({ userId, skillKey, tier, input }, deps = {}) {
@@ -87,14 +99,15 @@ async function save({ userId, skillKey, tier, input }, deps = {}) {
   if (!skillByKey(skillKey)) return fail(400, "invalid", "Choose a skill from the list.");
   const verified = await prisma.skillSubmission.findFirst({ where: { userId, skillKey, status: "verified" } });
   if (!verified) return fail(403, "not_verified", "You can publish a package in a skill once you are verified in it.");
-  const checked = validatePackage(input);
+  const checked = validatePackage(skillKey, input);
   if (!checked.ok) return checked;
   const row = await prisma.package.upsert({
     where: { talentId_skillKey_tier: { talentId: userId, skillKey, tier } },
-    update: { ...checked.value },
+    // Saving answers the skill's own fields, so the old "how many" and "formats" are cleared.
+    update: { ...checked.value, quantity: null, formats: null },
     create: { talentId: userId, skillKey, tier, ...checked.value },
   });
-  console.log(`packages: saved package=${row.id} talent=${userId} skill=${skillKey} tier=${tier} readBack.price=${row.price}`);
+  console.log(`packages: saved package=${row.id} talent=${userId} skill=${skillKey} tier=${tier} readBack.price=${row.price} readBack.scopeKeys=${Object.keys(row.scope ?? {}).join(",")}`);
   return { ok: true, package: shape(row) };
 }
 
@@ -132,7 +145,7 @@ async function browse({ skill, cursor, limit }, deps = {}) {
   const byId = new Map(talents.map((t) => [t.id, t]));
   const storage = require("./storage");
   const items = rows
-    .filter((r) => byId.has(r.talentId) && ok.has(`${r.talentId}|${r.skillKey}`))
+    .filter((r) => byId.has(r.talentId) && ok.has(`${r.talentId}|${r.skillKey}`) && !needsUpdate(r))
     .sort((a, b) => new Date(byId.get(b.talentId).lastActiveAt ?? 0) - new Date(byId.get(a.talentId).lastActiveAt ?? 0) || a.id.localeCompare(b.id));
   const start = cursor ? Math.max(0, items.findIndex((i) => i.id === cursor) + 1) : 0;
   const page = items.slice(start, start + take);
@@ -145,12 +158,12 @@ async function browse({ skill, cursor, limit }, deps = {}) {
 async function detail({ id }, deps = {}) {
   const prisma = deps.prisma ?? realPrisma;
   const row = await prisma.package.findUnique({ where: { id } });
-  if (!row || row.status !== "active") return null;
+  if (!row || row.status !== "active" || needsUpdate(row)) return null;
   const talent = await prisma.user.findFirst({ where: { id: row.talentId, deletedAt: null, role: "talent" }, select: { id: true, fullName: true, photoPath: true, lastActiveAt: true } });
   if (!talent) return null;
   const spec = briefs.briefSpec(row.skillKey, "oneDelivery");
-  // The package already answers what is included, how many, in which formats and how many rounds: the client fills in the rest.
-  const asked = new Set(["deliverables", "quantity", "formats", "revisionsIncluded"]);
+  // The package already answers what is included, its rounds of changes and its skill's own fields: the client fills in the rest.
+  const asked = new Set(["deliverables", "revisionsIncluded", ...briefs.packageFields(row.skillKey).map((f) => f.key)]);
   const reputation = await require("./reputation").talentReputation(talent.id, { prisma });
   return {
     package: shape(row),
@@ -166,7 +179,7 @@ async function order({ packageId, clientId, brief, note }, deps = {}) {
   const prisma = deps.prisma ?? realPrisma;
   const now = deps.now ?? new Date();
   const pkg = await prisma.package.findUnique({ where: { id: packageId } });
-  if (!pkg || pkg.status !== "active") return fail(404, "not_found", "This package isn't available.");
+  if (!pkg || pkg.status !== "active" || needsUpdate(pkg)) return fail(404, "not_found", "This package isn't available.");
   if (pkg.talentId === clientId) return fail(400, "own_package", "That's your own package.");
   const unavailable = featureFlags.unavailableReason({ jobType: "oneDelivery", currency: pkg.currency });
   if (unavailable) return fail(400, unavailable.code, unavailable.error);
@@ -177,7 +190,8 @@ async function order({ packageId, clientId, brief, note }, deps = {}) {
   if (open) return fail(409, "already_ordered", "You already ordered this and are waiting for their answer.");
 
   const typed = brief && typeof brief === "object" ? brief : {};
-  const full = { ...typed, deliverables: pkg.included, quantity: pkg.quantity, formats: pkg.formats, revisionsIncluded: pkg.revisions };
+  // The package's own answers win over anything typed for the same field: the client is buying what it states.
+  const full = { ...typed, ...pkg.scope, deliverables: pkg.included, revisionsIncluded: pkg.revisions };
   const checked = briefs.validateBrief({ skillKey: pkg.skillKey, jobType: "oneDelivery", brief: full, price: Number(pkg.price) });
   if (!checked.ok) return fail(400, "invalid", checked.error, checked.field);
   const noteText = typeof note === "string" ? note.trim().slice(0, 500) : "";

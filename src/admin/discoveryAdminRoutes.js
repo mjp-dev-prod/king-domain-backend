@@ -10,6 +10,7 @@ const mailer = require("./mailer");
 const discovery = require("../discovery");
 const { POST_REJECT_REASONS } = require("../safety");
 const { skillByKey } = require("../skills");
+const { describe: describeBrief } = require("../briefs");
 
 const ALREADY_HANDLED = "Someone else just handled this one. Refresh the list.";
 
@@ -49,6 +50,7 @@ postsRouter.get("/:id", async (req, res) => {
       deliveryDays: j.deliveryDays,
       visibility: j.visibility,
       brief: j.brief,
+      briefLines: describeBrief(j.skillKey, j.jobType, j.brief),
       screeningQuestions: j.screeningQuestions ?? [],
       flags: j.screeningFlags ?? [],
       createdAt: j.createdAt,
@@ -139,7 +141,7 @@ shortlistsRouter.get("/:id", async (req, res) => {
   const taken = new Set(r.items.map((i) => i.talentId));
   const found = await discovery.browseTalents({ id: null }, { skill: r.skillKey, limit: 20 });
   res.json({
-    request: { id: r.id, status: r.status, skillKey: r.skillKey, skillLabel: skillByKey(r.skillKey)?.label ?? r.skillKey, jobType: r.jobType, currency: r.currency, budget: r.budget.toString(), brief: r.brief, note: r.note, clockStartedAt: r.clockStartedAt, sentAt: r.sentAt, client: r.client, claimedById: r.claimedById },
+    request: { id: r.id, status: r.status, skillKey: r.skillKey, skillLabel: skillByKey(r.skillKey)?.label ?? r.skillKey, jobType: r.jobType, currency: r.currency, budget: r.budget.toString(), brief: r.brief, briefLines: describeBrief(r.skillKey, r.jobType, r.brief), note: r.note, clockStartedAt: r.clockStartedAt, sentAt: r.sentAt, client: r.client, claimedById: r.claimedById },
     items,
     candidates: found.talents.filter((t) => !taken.has(t.id)),
     limits: { min: MIN_ITEMS, max: MAX_ITEMS },

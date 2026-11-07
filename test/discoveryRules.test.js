@@ -6,8 +6,11 @@ const safety = require("../src/safety");
 const rules = require("../src/discoveryRules");
 
 const NOW = new Date("2026-11-10T12:00:00Z");
-const common = { deliverables: "Edit 3 reels", quantity: 3, formats: "MP4 1080x1920", revisionsIncluded: 2, usageRights: "organic" };
-const video = { ...common, durationSeconds: 30, aspectRatio: "9:16", rawFootage: "Google Drive link, shared after award" };
+const common = { deliverables: "Edit 3 reels", revisionsIncluded: 2 };
+const video = { ...common, quantity: 3, durationSeconds: 30, aspectRatio: "9:16", rawFootage: "Google Drive link, shared after award", projectFile: false, usageRights: "organic" };
+const site = { ...common, siteKind: "A new website", pages: 5, builtWith: "WordPress", contentBy: "I do", hosting: "I have them" };
+const social = { ...common, platforms: ["Instagram"], postsPerWeek: 3, contentBy: "A mix of both", postsForYou: true, replies: false, report: true };
+const words = { ...common, writingKind: "Blog post or article", quantity: 4, wordCount: 800, tone: "Friendly", byline: "The talent's name", deliveredAs: "Google Doc" };
 
 describe("structured brief", () => {
   it("every skill and type has a spec with the common fields", () => {
@@ -20,6 +23,60 @@ describe("structured brief", () => {
     }
     assert.equal(briefs.briefSpec("nope", "oneDelivery"), null);
     assert.equal(briefs.briefSpec("writing", "contest"), null, "no contests (D1)");
+  });
+
+  it("asks each skill its own questions, not a designer's questions for everyone (2026-11-07)", () => {
+    const keys = (skill) => briefs.briefSpec(skill, "oneDelivery").fields.map((f) => f.key);
+    for (const skill of ["graphic-design", "short-form-video", "social-media", "writing", "web-development"]) {
+      assert.ok(!keys(skill).includes("formats"), `${skill}: "formats or sizes" is gone`);
+      for (const k of ["deliverables", "revisionsIncluded", "clientFiles", "references"]) assert.ok(keys(skill).includes(k), `${skill} keeps ${k}`);
+    }
+    const web = keys("web-development");
+    assert.ok(!web.includes("quantity") && !web.includes("usageRights"), "a website has no 'how many' and no ad-usage terms");
+    for (const k of ["siteKind", "pages", "features", "builtWith", "hosting", "handover"]) assert.ok(web.includes(k), `web asks ${k}`);
+    assert.ok(!keys("social-media").includes("quantity"), "posts per week already says how many");
+    assert.ok(keys("writing").includes("byline") && !keys("writing").includes("usageRights"), "writing asks whose name goes on it");
+    assert.ok(keys("graphic-design").includes("usageRights") && keys("short-form-video").includes("usageRights"), "usage rights stay where they mean something");
+  });
+
+  it("pick-several, yes-or-no and the fixed handover term", () => {
+    const ok = briefs.validateBrief({ skillKey: "web-development", jobType: "oneDelivery", brief: { ...site, features: ["Blog", "Contact form"], handover: "I keep nothing" }, price: 90000 });
+    assert.equal(ok.ok, true, JSON.stringify(ok));
+    assert.deepEqual(ok.brief.features, ["Contact form", "Blog"], "kept in the form's order");
+    assert.match(ok.brief.handover, /admin login, the code and every account/, "the handover term is written as it stands, whatever was sent");
+    assert.equal(briefs.validateBrief({ skillKey: "web-development", jobType: "oneDelivery", brief: { ...site, features: ["Crypto mining"] }, price: 1 }).field, "features");
+    assert.deepEqual(briefs.validateBrief({ skillKey: "web-development", jobType: "oneDelivery", brief: site, price: 1 }).brief.features, [], "features are optional");
+    const noPlatform = briefs.validateBrief({ skillKey: "social-media", jobType: "monthly", brief: { ...social, platforms: [], months: 1, monthlyScope: "Posts" }, price: 1 });
+    assert.equal(noPlatform.field, "platforms");
+    assert.match(noPlatform.error, /at least one/);
+    const unsaid = briefs.validateBrief({ skillKey: "social-media", jobType: "monthly", brief: { ...social, postsForYou: undefined, months: 1, monthlyScope: "Posts" }, price: 1 });
+    assert.equal(unsaid.field, "postsForYou");
+    assert.match(unsaid.error, /yes or no/);
+    assert.equal(briefs.validateBrief({ skillKey: "social-media", jobType: "monthly", brief: { ...social, replies: "yes", months: 1, monthlyScope: "Posts" }, price: 1 }).field, "replies", "a word is not a yes or no");
+  });
+
+  it("reads a brief back as labelled lines, old briefs included", () => {
+    const lines = briefs.describe("social-media", "monthly", { ...social, months: 2, monthlyScope: "Posts" });
+    const by = Object.fromEntries(lines.map((l) => [l.key, l]));
+    assert.equal(by.platforms.value, "Instagram");
+    assert.equal(by.postsForYou.value, "Yes");
+    assert.equal(by.replies.value, "No");
+    assert.equal(by.postsForYou.label, "The talent posts for you (they will need access to the accounts)");
+    const old = briefs.describe("web-development", "oneDelivery", { deliverables: "A site", quantity: 1, formats: "Responsive", stack: "React", pages: 3, usageRights: "organic" });
+    const o = Object.fromEntries(old.map((l) => [l.key, l]));
+    assert.equal(o.formats.label, "Formats or sizes");
+    assert.equal(o.usageRights.value, "Posting on my own pages");
+    assert.equal(o.pages.label, "How many pages or screens");
+    assert.deepEqual(briefs.describe("writing", "oneDelivery", null), []);
+  });
+
+  it("a package answers its skill's own fields, and only those", () => {
+    assert.deepEqual(briefs.packageFields("web-development").map((f) => f.key), ["siteKind", "pages", "features", "products", "builtWith"]);
+    assert.ok(briefs.packageFields("graphic-design").every((f) => f.key !== "dimensions"), "the size is the client's to say");
+    const ok = briefs.validatePackageScope("social-media", { platforms: ["TikTok"], postsPerWeek: 5, contentBy: "A mix of both", postsForYou: true, replies: true, report: false, brandVoice: "ignored" });
+    assert.equal(ok.ok, true);
+    assert.equal(ok.scope.brandVoice, undefined, "only the package's own fields are kept");
+    assert.equal(briefs.validatePackageScope("social-media", { platforms: ["TikTok"] }).field, "postsPerWeek");
   });
 
   it("one delivery: the price is what the client typed", () => {
@@ -39,22 +96,22 @@ describe("structured brief", () => {
 
   it("milestones: 2 to 5, and the price is their sum", () => {
     const m = (title, amount, days = 7) => ({ title, amount, days });
-    const ok = briefs.validateBrief({ skillKey: "web-development", jobType: "milestones", brief: { ...common, pages: 5, milestones: [m("Design", 30000), m("Build", 70000, 14)] } });
+    const ok = briefs.validateBrief({ skillKey: "web-development", jobType: "milestones", brief: { ...site, milestones: [m("Design", 30000), m("Build", 70000, 14)] } });
     assert.equal(ok.ok, true);
     assert.equal(ok.budget, 100000);
-    assert.equal(briefs.validateBrief({ skillKey: "web-development", jobType: "milestones", brief: { ...common, pages: 5, milestones: [m("One", 1)] } }).field, "milestones");
-    assert.equal(briefs.validateBrief({ skillKey: "web-development", jobType: "milestones", brief: { ...common, pages: 5, milestones: [m("A", 5), m("B", -1)] } }).field, "milestones");
+    assert.equal(briefs.validateBrief({ skillKey: "web-development", jobType: "milestones", brief: { ...site, milestones: [m("One", 1)] } }).field, "milestones");
+    assert.equal(briefs.validateBrief({ skillKey: "web-development", jobType: "milestones", brief: { ...site, milestones: [m("A", 5), m("B", -1)] } }).field, "milestones");
   });
 
   it("monthly: the price is one month, the brief says how many", () => {
-    const r = briefs.validateBrief({ skillKey: "social-media", jobType: "monthly", brief: { ...common, platforms: "Instagram", postsPerWeek: 3, months: 3, monthlyScope: "12 posts and a calendar" }, price: 80000 });
+    const r = briefs.validateBrief({ skillKey: "social-media", jobType: "monthly", brief: { ...social, months: 3, monthlyScope: "12 posts and a calendar" }, price: 80000 });
     assert.equal(r.ok, true);
     assert.equal(r.budget, 80000);
     assert.equal(r.brief.months, 3);
   });
 
   it("hourly: the price is the weekly cap, rate times hours", () => {
-    const r = briefs.validateBrief({ skillKey: "writing", jobType: "hourly", brief: { ...common, wordCount: 800, tone: "Friendly", hourlyRate: 3000, weeklyCapHours: 10, weeks: 4 } });
+    const r = briefs.validateBrief({ skillKey: "writing", jobType: "hourly", brief: { ...words, hourlyRate: 3000, weeklyCapHours: 10, weeks: 4 } });
     assert.equal(r.ok, true);
     assert.equal(r.budget, 30000);
   });

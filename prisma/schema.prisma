@@ -1560,10 +1560,14 @@ model Package {
   deliveryDays Int
   /// Rounds of changes included (0 to 2: the agreed limit).
   revisions    Int
-  /// The standard fields: what is included, how many, in which formats.
+  /// What is included, in the talent's words.
   included     String
-  quantity     Int
-  formats      String
+  /// The skill's own package fields (briefs.packageFields), e.g. pages and features for a website. Null on a
+  /// package saved before 2026-11-07, which stays hidden from clients until the talent answers them.
+  scope        Json?
+  /// Before 2026-11-07 every package said "how many" and "formats or sizes"; kept so old rows still read.
+  quantity     Int?
+  formats      String?
   /// active or paused.
   status       String   @default("active")
   createdAt    DateTime @default(now())
