@@ -70,14 +70,19 @@ function classify(status, body) {
   return "failed";
 }
 
-function messageBody(token, { title, body, data = {} }) {
+// The small icons the app ships (android/app/src/main/res/drawable). A message may name one so the notification shows
+// the icon that fits what happened (a check for good news, a clock for waiting, an arrow for "fix and resend").
+// Only these names are ever sent, so a typo can never reach a phone; an app too old to have an icon shows its default.
+const ICONS = new Set(["ic_stat_kd", "ic_stat_check", "ic_stat_clock", "ic_stat_retry"]);
+
+function messageBody(token, { title, body, data = {}, icon }) {
   return {
     message: {
       token,
       notification: { title, body },
       // FCM requires every data value to be a string.
       data: Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v)])),
-      android: { priority: "HIGH", notification: { channel_id: CHANNEL_ID } },
+      android: { priority: "HIGH", notification: { channel_id: CHANNEL_ID, ...(ICONS.has(icon) ? { icon } : {}) } },
     },
   };
 }
@@ -202,4 +207,4 @@ async function notifyUser(userId, message) {
   return sender.notifyUser(userId, message);
 }
 
-module.exports = { registerToken, unregisterToken, pruneStaleTokens, createPush, classify, configured, notifyUser, STALE_DAYS, MAX_DEVICES_PER_PERSON };
+module.exports = { registerToken, unregisterToken, pruneStaleTokens, createPush, classify, configured, notifyUser, ICONS, STALE_DAYS, MAX_DEVICES_PER_PERSON };

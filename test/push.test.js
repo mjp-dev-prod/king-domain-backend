@@ -196,6 +196,20 @@ describe("the FCM sender", () => {
       assert.equal(q.body.message.android.notification.channel_id, "kd_updates");
     }
     assert.deepEqual(fcm.requests.map((q) => q.body.message.token).sort(), [t1, t2].sort());
+    assert.equal("icon" in fcm.requests[0].body.message.android.notification, false, "no icon named, none sent: the app's default shows");
+  });
+
+  it("a message can name one of the app's small icons, and nothing else ever reaches a phone", async () => {
+    const u = await person();
+    await push.registerToken({ userId: u.id, token: fcmToken() });
+    fcm.requests.length = 0;
+    await sender().notifyUser(u.id, { title: "You're verified in Web development", body: "b", icon: "ic_stat_check", data: { type: "skill_verified" } });
+    assert.equal(fcm.requests[0].body.message.android.notification.icon, "ic_stat_check");
+    assert.equal(fcm.requests[0].body.message.android.notification.channel_id, "kd_updates", "the channel is kept");
+    await sender().notifyUser(u.id, { title: "t", body: "b", icon: "ic_stat_made_up" });
+    assert.equal("icon" in fcm.requests[1].body.message.android.notification, false, "a name the app does not ship is dropped");
+    await sender().notifyUser(u.id, { title: "t", body: "b", icon: "../../etc/passwd" });
+    assert.equal("icon" in fcm.requests[2].body.message.android.notification, false);
   });
 
   it("does nothing, and asks FCM nothing, for a person with no device", async () => {

@@ -162,6 +162,8 @@ describe("telling the talent", () => {
       { type: "skill_checked", skillKey: "short-form-video" },
       { type: "skill_needs_change", skillKey: "web-development" },
     ]);
+    assert.deepEqual(push.sent.map((p) => p.message.icon), ["ic_stat_check", "ic_stat_retry", "ic_stat_clock", "ic_stat_retry"], "verified is a check, waiting is a clock, fix-and-resend is an arrow");
+    for (const p of push.sent) assert.ok(require("../src/push").ICONS.has(p.message.icon), "only icons the app ships");
     assert.equal(push.sent[0].message.title, "You're verified in Web development");
     assert.match(push.sent[2].message.body, /two reviewers/);
     for (const p of push.sent) assert.ok(p.message.title.length < 45 && p.message.body.length < 110, "short enough to read on a lock screen");

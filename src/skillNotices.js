@@ -79,11 +79,13 @@ async function readyForReview({ submission }, { db = realPrisma, ...deps } = {})
 }
 
 // What the talent is told. Short, plain, about one skill; the type lets the app refresh the right screen.
+// `icon` names one of the app's own small icons (push.ICONS): a clock for waiting, a check for good news, an arrow for
+// "fix it and send again". No emoji: the brand uses line icons, and an emoji looks different on every phone.
 const TALENT = {
-  checked: (skill) => ({ title: "It passed the first check", body: `Your ${skill} work is now with two reviewers. We'll tell you when they've decided.` }),
-  needs_change: (skill) => ({ title: "One thing to fix", body: `We couldn't pass your ${skill} work on the first check. Open it to see why.` }),
-  verified: (skill) => ({ title: `You're verified in ${skill}`, body: "Clients can see it on your profile, and you can apply to jobs in it now." }),
-  not_yet: (skill) => ({ title: `Not yet in ${skill}`, body: "The reviewers left notes on what to fix. Open it to read them." }),
+  checked: (skill) => ({ title: "It passed the first check", body: `Your ${skill} work is now with two reviewers. We'll tell you when they've decided.`, icon: "ic_stat_clock" }),
+  needs_change: (skill) => ({ title: "One thing to fix", body: `We couldn't pass your ${skill} work on the first check. Open it to see why.`, icon: "ic_stat_retry" }),
+  verified: (skill) => ({ title: `You're verified in ${skill}`, body: "Clients can see it on your profile, and you can apply to jobs in it now.", icon: "ic_stat_check" }),
+  not_yet: (skill) => ({ title: `Not yet in ${skill}`, body: "The reviewers left notes on what to fix. Open it to read them.", icon: "ic_stat_retry" }),
 };
 
 /** Pushes the talent's phone. `kind` is one of the keys above. Never throws. */
@@ -91,8 +93,8 @@ async function tellTalent(userId, kind, skillKey, { push = require("./push") } =
   try {
     const make = TALENT[kind];
     if (!make || !userId) return null;
-    const { title, body } = make(label(skillKey));
-    return await push.notifyUser(userId, { title, body, data: { type: `skill_${kind}`, skillKey } });
+    const { title, body, icon } = make(label(skillKey));
+    return await push.notifyUser(userId, { title, body, icon, data: { type: `skill_${kind}`, skillKey } });
   } catch (err) {
     console.error(`skill-notices: push ${kind} to user=${userId} failed: ${err.message}`);
     return null;
