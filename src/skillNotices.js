@@ -101,7 +101,7 @@ async function tellTalent(userId, kind, skillKey, { push = require("./push") } =
 
 /**
  * Reminds the team about work waiting past its step's target: once when it passes the target and once at twice the
- * target, and then stops. Each reminder is an alert row whose link names the submission, so a restart, a second
+ * target (never less than a target after the first), and then stops. Each reminder is an alert row whose link names the submission, so a restart, a second
  * server or an overlapping run never sends the same reminder twice. A reviewer who already reviewed it is not nagged.
  */
 async function sweepWaiting(db = realPrisma, now = new Date(), deps = {}) {
@@ -113,8 +113,12 @@ async function sweepWaiting(db = realPrisma, now = new Date(), deps = {}) {
     for (const s of rows) {
       const waited = now.getTime() - new Date(s[step.since]).getTime();
       const link = `${step.path}/${s.id}`;
-      const before = await db.opsAlert.count({ where: { queueKey: step.queueKey, link, title: { startsWith: "Reminder" } } });
+      const sent_ = await db.opsAlert.findMany({ where: { queueKey: step.queueKey, link, title: { startsWith: "Reminder" } }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
+      const before = sent_.length;
       if (before >= MAX_REMINDERS || waited <= targetMinutes * 60_000 * (before + 1)) continue;
+      // Reminders are a target apart: work that is already far past its target gets one now and the next a full target
+      // later, not two in a row on consecutive sweeps (it did, the first time this ran on old work).
+      if (before > 0 && now.getTime() - new Date(sent_[0].createdAt).getTime() < targetMinutes * 60_000) continue;
       const pool = step.status === "review" ? await reviewers(db, s.skillKey) : await checkers(db);
       const done = new Set(s.reviews.map((r) => r.reviewerId));
       const to = pool.filter((a) => !done.has(a.id));

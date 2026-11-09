@@ -99,6 +99,23 @@ describe("waiting too long", () => {
     await clean(s);
   });
 
+  it("work that is already far past its target gets one reminder now and the next a full target later, never two in a row", async () => {
+    const t0 = new Date("2026-11-09T09:00:00Z");
+    const s = await seed({ submittedAt: new Date(t0.getTime() - 172 * HOUR) });
+    const run = (hoursAfter) => notices.sweepWaiting(prisma, new Date(t0.getTime() + hoursAfter * HOUR), deps());
+    await run(0);
+    await run(0.25);
+    await run(0.5);
+    assert.equal(await reminders(s), 1, "172 hours old on the first sweep, and the sweeps that follow 15 minutes later stay quiet");
+    await run(23);
+    assert.equal(await reminders(s), 1, "still inside the target since the first reminder");
+    await run(24.5);
+    assert.equal(await reminders(s), 2, "a full target (24 hours) after the first, the second");
+    await run(100);
+    assert.equal(await reminders(s), 2);
+    await clean(s);
+  });
+
   it("two sweeps at the same moment send no more than the two reminders a step allows", async () => {
     const t0 = new Date("2026-11-09T09:00:00Z");
     const s = await seed({ submittedAt: new Date(t0.getTime() - 30 * HOUR) });

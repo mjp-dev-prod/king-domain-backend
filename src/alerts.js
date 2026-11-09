@@ -48,7 +48,8 @@ const fullLink = (d, link) => (link ? `${d.dashboardUrl}${link}` : null);
 async function raiseAlert(db, { severity, queueKey, title, body, link = null, to = null }, deps) {
   if (!SEVERITIES.includes(severity)) throw new Error(`Unknown alert severity "${severity}".`);
   const d = defaults(deps);
-  const row = await db.opsAlert.create({ data: { severity, queueKey, title, body, link } });
+  // Stamped from the same clock as everything else here (d.now), so what happened when can be reasoned about and tested.
+  const row = await db.opsAlert.create({ data: { severity, queueKey, title, body, link, createdAt: d.now } });
   if (severity === "digest") {
     console.log(`alerts: digest queued queue=${queueKey} alert=${row.id}`);
     return row;
