@@ -12,6 +12,7 @@ const { skillByKey, SKILLS } = require("../skills");
 const { rubricFor, SCALE } = require("../rubrics");
 const rules = require("../submissionRules");
 const sub = require("../submissions");
+const notices = require("../skillNotices");
 
 const ALREADY_HANDLED = "Someone else just handled this one. Refresh the list.";
 const NOTE_MIN = 10;
@@ -120,6 +121,9 @@ authenticityRouter.post("/:id/pass", async (req, res) => {
   if (!ok) return res.status(409).json({ error: ALREADY_HANDLED });
   console.log(`authenticity: pass submission=${s.id} by admin=${req.admin.id} readBack.status=${(await prisma.skillSubmission.findUnique({ where: { id: s.id }, select: { status: true } })).status}`);
   res.json({ ok: true });
+  // After the answer, so a slow email or push can't hold the checker up. Both are swallowed on failure.
+  notices.readyForReview({ submission: s });
+  notices.tellTalent(s.userId, "checked", s.skillKey);
 });
 
 /** Not passed, no penalty: the person is told why and can fix and resend. */
@@ -138,6 +142,7 @@ authenticityRouter.post("/:id/stop", async (req, res) => {
   const sent = await mailer.sendSkillAuthenticity({ to: s.user.email, name: s.user.fullName, skillLabel: skillByKey(s.skillKey).label, outcome: "stopped", note });
   console.log(`authenticity: stop submission=${s.id} by admin=${req.admin.id} emailSent=${sent.sent}`);
   res.json({ ok: true });
+  notices.tellTalent(s.userId, "needs_change", s.skillKey);
 });
 
 /** Resent rejected work unchanged: 2 months out of the skill, then 3 (D9). Only for a flagged repeat. */
@@ -160,6 +165,7 @@ authenticityRouter.post("/:id/penalize", async (req, res) => {
   const sent = await mailer.sendSkillAuthenticity({ to: s.user.email, name: s.user.fullName, skillLabel: skillByKey(s.skillKey).label, outcome: "restricted", note, until });
   console.log(`authenticity: penalize submission=${s.id} by admin=${req.admin.id} months=${months} priorRepeats=${prior} until=${until.toISOString()} emailSent=${sent.sent}`);
   res.json({ ok: true, months, until });
+  notices.tellTalent(s.userId, "needs_change", s.skillKey);
 });
 
 /** Someone else's work, or AI passed off as theirs: banned from the skill (D9). */
@@ -269,6 +275,7 @@ reviewRouter.post("/:id/review", async (req, res) => {
       : await mailer.sendSkillNotYet({ to: s.user.email, name: s.user.fullName, skillLabel, lines: reasons.lines, comments: reasons.comments });
     emailSent = sent.sent;
   }
+  if (result.state === "decided") notices.tellTalent(s.userId, result.outcome === "verified" ? "verified" : "not_yet", s.skillKey);
   console.log(`skill-review: submission=${s.id} by admin=${req.admin.id} verdict=${checked.verdict} reviews=${all.length} state=${result.state}${result.outcome ? ` outcome=${result.outcome}` : ""} emailSent=${emailSent}`);
   res.json({ ok: true, state: result.state, outcome: result.outcome ?? null });
 });

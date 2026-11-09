@@ -1,29 +1,31 @@
-// The audit log and proof review behind the reviewer capability, over real HTTP.
+// The audit log, and the first check behind the checker capability, over real HTTP.
 const { describe, it, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const h = require("./helpers");
 const { prisma } = h;
 const { recordAudit, actorRoleOf } = require("../src/admin/audit");
 
-let ctx, server, owner, reviewer, reader, tOwner, tReviewer, tReader, profile;
+let ctx, server, owner, checker, reader, tOwner, tChecker, tReader;
 before(async () => {
   ctx = await h.fixtures();
   owner = await h.ensureAdmin("testsuite-owner@example.com", { role: "owner" });
-  reviewer = await h.ensureAdmin("testsuite-reviewer@example.com", { capabilities: ["reviewer"], reviewerSkills: ["writing"] });
+  checker = await h.ensureAdmin("testsuite-checker@example.com", { capabilities: ["checker"] });
   reader = await h.ensureAdmin("testsuite-reader@example.com");
   server = await h.startServer({ port: 4621, paystackUrl: "http://127.0.0.1:9", autoRelease: false });
-  [tOwner, tReviewer, tReader] = await Promise.all([owner, reviewer, reader].map(h.adminTokenFor));
-  profile = await prisma.talentProfile.findUnique({ where: { userId: ctx.talentA.id } });
+  [tOwner, tChecker, tReader] = await Promise.all([owner, checker, reader].map(h.adminTokenFor));
 });
 after(async () => {
   server?.stop();
-  await prisma.proofItem.deleteMany({ where: { talentProfileId: profile.id } });
-  await prisma.adminAuditEvent.deleteMany({ where: { actorId: { in: [owner.id, reviewer.id, reader.id] } } });
+  await prisma.skillSubmission.deleteMany({ where: { userId: ctx.talentA.id, skillKey: SKILL } });
+  await prisma.adminAuditEvent.deleteMany({ where: { actorId: { in: [owner.id, checker.id, reader.id] } } });
   await prisma.$disconnect();
 });
 
 const api = (tok, method, p, body) => h.call(server.base, tok, method, p, body);
-const pending = () => prisma.proofItem.create({ data: { talentProfileId: profile.id, category: h.CATEGORY, title: `${h.TITLE_PREFIX}proof` } });
+const SKILL = "short-form-video";
+const { AUTH_CHECKLIST } = require("../src/admin/skillReviewRoutes");
+const ticked = Object.fromEntries(AUTH_CHECKLIST.map((c) => [c.key, true]));
+const waiting = () => prisma.skillSubmission.create({ data: { userId: ctx.talentA.id, skillKey: SKILL, status: "authenticity", submittedAt: new Date() } });
 
 describe("audit log", () => {
   it("actorRoleOf records role and sorted capabilities", () => {
@@ -40,34 +42,33 @@ describe("audit log", () => {
   });
 });
 
-describe("proof review needs the reviewer capability and leaves an audit trail", () => {
+describe("the first check needs the checker capability and leaves an audit trail", () => {
   it("an admin without the capability gets 403 and nothing changes", async () => {
-    const item = await pending();
-    const r = await api(tReader, "POST", `/admin/proof-items/${item.id}/approve`);
+    const item = await waiting();
+    const r = await api(tReader, "POST", `/admin/authenticity/${item.id}/pass`, { checklist: ticked });
     assert.equal(r.status, 403);
-    assert.equal((await prisma.proofItem.findUnique({ where: { id: item.id } })).status, "pending");
+    assert.equal((await prisma.skillSubmission.findUnique({ where: { id: item.id } })).status, "authenticity");
   });
 
-  it("a reviewer approves, and the approval and its audit event land together", async () => {
-    const item = await pending();
-    const r = await api(tReviewer, "POST", `/admin/proof-items/${item.id}/approve`);
+  it("a checker passes it, and the pass and its audit event land together", async () => {
+    const item = await waiting();
+    const r = await api(tChecker, "POST", `/admin/authenticity/${item.id}/pass`, { checklist: ticked });
     assert.equal(r.status, 200, JSON.stringify(r.json));
-    const events = await prisma.adminAuditEvent.findMany({ where: { subjectType: "ProofItem", subjectId: item.id } });
+    assert.equal((await prisma.skillSubmission.findUnique({ where: { id: item.id } })).status, "review");
+    const events = await prisma.adminAuditEvent.findMany({ where: { subjectType: "SkillSubmission", subjectId: item.id } });
     assert.equal(events.length, 1);
-    assert.equal(events[0].action, "proof.approve");
-    assert.equal(events[0].actorId, reviewer.id);
-    assert.equal(events[0].actorRole, "admin:reviewer");
+    assert.equal(events[0].action, "authenticity.pass");
+    assert.equal(events[0].actorId, checker.id);
+    assert.equal(events[0].actorRole, "admin:checker");
   });
 
-  it("a rejection keeps its reason in the audit event even though the item is deleted", async () => {
-    const item = await pending();
-    const reason = "The file doesn't open. Please upload it again as an image or PDF.";
-    const r = await api(tOwner, "POST", `/admin/proof-items/${item.id}/reject`, { reason });
+  it("stopping it keeps the reason in the audit event", async () => {
+    const item = await waiting();
+    const reason = "The files don't open. Please send them again as an image or PDF.";
+    const r = await api(tOwner, "POST", `/admin/authenticity/${item.id}/stop`, { note: reason });
     assert.equal(r.status, 200, JSON.stringify(r.json));
-    assert.equal(await prisma.proofItem.findUnique({ where: { id: item.id } }), null);
-    const [event] = await prisma.adminAuditEvent.findMany({ where: { subjectType: "ProofItem", subjectId: item.id } });
-    assert.equal(event.action, "proof.reject");
+    const [event] = await prisma.adminAuditEvent.findMany({ where: { subjectType: "SkillSubmission", subjectId: item.id } });
+    assert.equal(event.action, "authenticity.stop");
     assert.equal(event.note, reason);
-    assert.equal(event.details.title, `${h.TITLE_PREFIX}proof`);
   });
 });

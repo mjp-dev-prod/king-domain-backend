@@ -10,6 +10,7 @@ const { SKILLS, skillByKey } = require("../skills");
 const storage = require("../storage");
 const rules = require("../submissionRules");
 const sub = require("../submissions");
+const notices = require("../skillNotices");
 const submissionWork = require("../submissionWork");
 const linkPreview = require("../linkPreview");
 
@@ -276,6 +277,8 @@ router.post(
     });
     if (moved.count !== 1) return res.status(409).json({ error: "This submission has already been sent.", code: "not_a_draft" });
     console.log(`submissions: sent submission=${s.id} user=${req.user.id} skill=${s.skillKey} outputs=${nowEtags.length} previouslyRejectedEtags=${before.length} repeatOfRejected=${repeatOfRejected}`);
+    // Tell the team now, not at the next sweep. Failures are swallowed inside, so the person's "Sent" never fails on it.
+    notices.submissionSent({ submission: s, person: { fullName: req.user.fullName } });
     return respond(res, s.id);
   },
 );

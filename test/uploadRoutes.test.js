@@ -36,61 +36,6 @@ async function send(tok, path, fields, files = {}, base = server.base) {
   return { status: r.status, json: await r.json().catch(() => null) };
 }
 
-const proofCount = async () => {
-  const profile = await prisma.talentProfile.findUnique({ where: { userId: ctx.talentA.id } });
-  return prisma.proofItem.count({ where: { talentProfileId: profile.id } });
-};
-const proofFields = { category: h.CATEGORY, title: "Upload check" };
-
-describe("POST /users/me/proof-items", () => {
-  before(async () => {
-    const profile = await prisma.talentProfile.findUnique({ where: { userId: ctx.talentA.id } });
-    await prisma.proofItem.deleteMany({ where: { talentProfileId: profile.id } });
-  });
-  after(async () => {
-    const profile = await prisma.talentProfile.findUnique({ where: { userId: ctx.talentA.id } });
-    await prisma.proofItem.deleteMany({ where: { talentProfileId: profile.id } });
-  });
-
-  it("refuses HTML dressed as a picture (415 unsupported_file) and records nothing", async () => {
-    const before = await proofCount();
-    const r = await send(ta, "/users/me/proof-items", proofFields, { file: { buffer: HTML, filename: "photo.png", type: "image/png" } });
-    assert.equal(r.status, 415, JSON.stringify(r.json));
-    assert.equal(r.json.code, "unsupported_file");
-    assert.equal(await proofCount(), before);
-  });
-
-  it("refuses an empty file (400 empty_file)", async () => {
-    const r = await send(ta, "/users/me/proof-items", proofFields, { file: { buffer: Buffer.alloc(0), filename: "a.png", type: "image/png" } });
-    assert.equal(r.status, 400);
-    assert.equal(r.json.code, "empty_file");
-  });
-
-  it("refuses a file over 10 MB with 413 file_too_large (not a 500)", async () => {
-    const big = Buffer.concat([PNG, Buffer.alloc(10 * 1024 * 1024)]);
-    const before = await proofCount();
-    const r = await send(ta, "/users/me/proof-items", proofFields, { file: { buffer: big, filename: "big.png", type: "image/png" } });
-    assert.equal(r.status, 413);
-    assert.equal(r.json.code, "file_too_large");
-    assert.match(r.json.error, /10 MB/);
-    assert.equal(await proofCount(), before);
-  });
-
-  it("refuses more than one file (400 too_many_files)", async () => {
-    const r = await send(ta, "/users/me/proof-items", proofFields, {
-      file: { buffer: PNG, filename: "a.png", type: "image/png" },
-      extra: { buffer: PNG, filename: "b.png", type: "image/png" },
-    });
-    assert.equal(r.status, 400);
-    assert.equal(r.json.code, "too_many_files");
-  });
-
-  it("still accepts a proof item with no file at all (the file is optional)", async () => {
-    const r = await send(ta, "/users/me/proof-items", proofFields);
-    assert.equal(r.status, 201, JSON.stringify(r.json));
-  });
-});
-
 describe("POST /jobs/:id/contract/submit", () => {
   it("refuses a bad file, and the contract stays in progress with no delivery recorded", async () => {
     const s = await h.seedWorking(ctx);
@@ -144,17 +89,6 @@ describe("checkUpload (the step between reading the file and storing it)", () =>
 });
 
 describe("an ACCEPTED file, followed into storage (against a fake Supabase)", () => {
-  it("a proof file is stored under the type its bytes show and a cleaned name, whatever the client claimed", async () => {
-    const profile = await prisma.talentProfile.findUnique({ where: { userId: ctx.talentA.id } });
-    const r = await send(ta, "/users/me/proof-items", proofFields, { file: { buffer: PNG, filename: "My Holiday.JPG", type: "text/html" } }, storedServer.base);
-    assert.equal(r.status, 201, JSON.stringify(r.json));
-    const keys = [...storage.objects.keys()].filter((k) => k.startsWith(`proof-items/${profile.id}/`));
-    assert.equal(keys.length, 1, [...storage.objects.keys()].join(", "));
-    assert.match(keys[0], /-My_Holiday\.png$/);
-    assert.equal(storage.objects.get(keys[0]).contentType, "image/png");
-    await prisma.proofItem.deleteMany({ where: { talentProfileId: profile.id } });
-  });
-
   it("a delivered PDF is stored as application/pdf in the deliverables bucket and recorded on the contract", async () => {
     const s = await h.seedWorking(ctx);
     const pdf = Buffer.concat([Buffer.from("%PDF-1.7\n"), Buffer.alloc(64)]);

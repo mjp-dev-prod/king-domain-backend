@@ -324,9 +324,6 @@ async function checkPieces(prisma, talentId, skillKey, pieces) {
     if (piece.type === "piece") {
       const found = await prisma.submissionPiece.findFirst({ where: { id: piece.id, submission: { userId: talentId, skillKey, status: "verified" } }, select: { id: true } });
       if (!found) return refuse(400, "invalid", "You can only show pieces from your verified work in this skill.");
-    } else if (piece.type === "proof") {
-      const found = await prisma.proofItem.findFirst({ where: { id: piece.id, status: "verified", talentProfile: { userId: talentId } }, select: { id: true } });
-      if (!found) return refuse(400, "invalid", "You can only show verified work.");
     } else {
       return refuse(400, "invalid", "A chosen piece wasn't understood.");
     }

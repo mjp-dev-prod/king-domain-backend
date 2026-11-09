@@ -136,20 +136,12 @@ async function hubEntry(db, userId, skill, now = new Date()) {
 }
 
 /**
- * Records a verified result's effect on the older gate: a verified ProofItem in the skill's category
- * is what lets a talent apply to jobs today. Runs inside the deciding transaction.
+ * What a verified result changes beyond the submission's own status. Today nothing: being verified IS a verified
+ * submission in the skill. (It used to also write an old-flow proof item as the gate; that flow was retired on
+ * 2026-11-09, and the table is kept only so old files can be cleaned up when an account is deleted.)
  */
-async function markVerified(tx, submission) {
-  const skill = skillByKey(submission.skillKey);
-  const profile = await tx.talentProfile.findUnique({ where: { userId: submission.userId } });
-  if (!profile || !skill) return null;
-  const category = categoryLabel(skill);
-  const title = `${skill.label} (verified)`;
-  const existing = await tx.proofItem.findFirst({ where: { talentProfileId: profile.id, category, title } });
-  if (existing) {
-    return tx.proofItem.update({ where: { id: existing.id }, data: { status: "verified", reviewedAt: new Date() } });
-  }
-  return tx.proofItem.create({ data: { talentProfileId: profile.id, category, title, status: "verified", reviewedAt: new Date() } });
+async function markVerified() {
+  return null;
 }
 
 /**

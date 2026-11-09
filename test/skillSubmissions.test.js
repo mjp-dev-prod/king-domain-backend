@@ -44,7 +44,6 @@ async function reset() {
   const ids = [ctx.talentA.id, ctx.talentB.id];
   await prisma.skillSubmission.deleteMany({ where: { userId: { in: ids } } });
   await prisma.skillRestriction.deleteMany({ where: { userId: { in: ids } } });
-  await prisma.proofItem.deleteMany({ where: { title: { endsWith: "(verified)" }, talentProfile: { userId: { in: ids } } } });
 }
 
 const api = (tok, method, p, body) => h.call(server.base, tok, method, p, body);
@@ -221,8 +220,7 @@ describe("the whole journey to verified", () => {
     assert.equal(mine.status, "verified");
     const hub = (await api(ta, "GET", "/users/me/skills")).json.skills.find((s) => s.skillKey === SKILL);
     assert.equal(hub.state, "verified");
-    const proof = await prisma.proofItem.findFirst({ where: { title: "Short-form video editing (verified)", talentProfile: { userId: ctx.talentA.id } } });
-    assert.equal(proof?.status, "verified", "the older apply gate sees the verification");
+    assert.equal(await prisma.proofItem.count({ where: { talentProfile: { userId: ctx.talentA.id }, title: { endsWith: "(verified)" } } }), 0, "no old-flow proof item is written any more: the verified submission is the whole truth");
     assert.equal((await api(ta, "POST", `/users/me/skills/${SKILL}/submissions`)).json.code, "already_verified");
 
     const audits = await prisma.adminAuditEvent.findMany({ where: { subjectId: id } });

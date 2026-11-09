@@ -4,7 +4,7 @@ const crypto = require("node:crypto");
 const { prisma } = require("../db");
 const { rateLimit } = require("../admin/rateLimit");
 const mailer = require("../admin/mailer");
-const { uploadProofFile, getProofFileSignedUrl, uploadAvatar, removeAvatar, avatarPublicUrl } = require("../storage");
+const { uploadAvatar, removeAvatar, avatarPublicUrl } = require("../storage");
 const paystack = require("../paystack");
 const accounts = require("../accounts");
 const push = require("../push");
@@ -103,26 +103,12 @@ function publicUser(user) {
   };
 }
 
-/** Resolves filePath to a short-lived signed URL — never returns the raw path. */
-async function serializeProofItem(item) {
-  return {
-    id: item.id,
-    category: item.category,
-    title: item.title,
-    fileUrl: item.filePath ? await getProofFileSignedUrl(item.filePath) : null,
-    status: item.status,
-    reviewedAt: item.reviewedAt,
-    createdAt: item.createdAt,
-  };
-}
-
 async function serializeTalentProfile(profile) {
   return {
     id: profile.id,
     headline: profile.headline,
     bio: profile.bio,
     skillCategories: profile.skillCategories,
-    proofItems: await Promise.all(profile.proofItems.map(serializeProofItem)),
     // Masked — never send the full account number back down. Presence of
     // bankAccountName is what the app uses to know payout setup is done;
     // the raw number/recipientCode never leave the server.
@@ -484,8 +470,7 @@ router.get("/me", requireUser, async (req, res) => {
 
 router.get("/me/profile", requireUser, requireTalentProfile, async (req, res) => {
   const profile = await prisma.talentProfile.findUnique({
-    where: { id: req.talentProfile.id },
-    include: { proofItems: { orderBy: { createdAt: "desc" } } },
+    where: { id: req.talentProfile.id },
   });
   return res.json({ profile: await serializeTalentProfile(profile) });
 });
@@ -511,8 +496,7 @@ router.patch("/me/profile", requireUser, requireTalentProfile, async (req, res) 
 
   const updated = await prisma.talentProfile.update({
     where: { id: req.talentProfile.id },
-    data,
-    include: { proofItems: { orderBy: { createdAt: "desc" } } },
+    data,
   });
   return res.json({ profile: await serializeTalentProfile(updated) });
 });
@@ -572,64 +556,6 @@ router.delete("/me/photo", requireUser, async (req, res) => {
   await dropPhotoObject(previous);
   const updated = await prisma.user.findUnique({ where: { id: req.user.id } });
   return res.json({ user: publicUser(updated) });
-});
-
-// ── Proof items — submission (review lives under /admin, see
-// admin/proofReviewRoutes.js: this is deliberately a one-way door, a
-// talent can submit and read their own items but never verify them) ──
-
-router.post(
-  "/me/proof-items",
-  requireUser,
-  requireTalentProfile,
-  singleFile("file"),
-  checkUpload,
-  async (req, res) => {
-    const { category, title } = req.body ?? {};
-
-    if (typeof category !== "string" || !category.trim()) {
-      return res.status(400).json({ error: "category is required." });
-    }
-    if (typeof title !== "string" || !title.trim()) {
-      return res.status(400).json({ error: "title is required." });
-    }
-
-    let filePath = null;
-    if (req.upload) {
-      // The type and name are the checked ones, never the client's.
-      filePath = await uploadProofFile({
-        talentProfileId: req.talentProfile.id,
-        buffer: req.upload.buffer,
-        originalName: req.upload.fileName,
-        contentType: req.upload.contentType,
-      });
-    }
-
-    const item = await prisma.proofItem.create({
-      data: {
-        talentProfileId: req.talentProfile.id,
-        category: category.trim(),
-        title: title.trim(),
-        filePath,
-      },
-    });
-
-    return res.status(201).json({ proofItem: await serializeProofItem(item) });
-  },
-);
-
-router.delete("/me/proof-items/:id", requireUser, requireTalentProfile, async (req, res) => {
-  const item = await prisma.proofItem.findUnique({ where: { id: req.params.id } });
-  if (!item || item.talentProfileId !== req.talentProfile.id) {
-    return res.status(404).json({ error: "Proof item not found." });
-  }
-  // Deliberately no delete once verified — that would let a talent erase a
-  // reviewer's decision. Removal is only for items still pending review.
-  if (item.status === "verified") {
-    return res.status(400).json({ error: "A verified proof item can't be removed." });
-  }
-  await prisma.proofItem.delete({ where: { id: item.id } });
-  return res.json({ ok: true });
 });
 
 // ── Payouts — bank account setup (see src/paystack.js) ────
@@ -732,8 +658,7 @@ router.post(
         bankName,
         bankAccountName: resolved.accountName,
         paystackRecipientCode: recipient.recipientCode,
-      },
-      include: { proofItems: { orderBy: { createdAt: "desc" } } },
+      },
     });
 
     return res.json({ profile: await serializeTalentProfile(updated) });

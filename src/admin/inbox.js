@@ -17,30 +17,6 @@ function percentile(values, p) {
 
 const QUEUES = [
   {
-    key: "proof",
-    label: "Proof verification",
-    capability: "reviewer",
-    path: "/proof-review",
-    // Provisional: the admin tools doc says to measure for six to eight weeks, then set it.
-    defaultTargetMinutes: 72 * 60,
-    defaultWhenLate: "The talent sees it is still in review, with the expected date.",
-    async openSince(db) {
-      const rows = await db.proofItem.findMany({ where: { status: "pending" }, select: { createdAt: true } });
-      return rows.map((r) => r.createdAt);
-    },
-    async resolvedDurationsMs(db) {
-      // Only approvals have a reviewedAt today; rejected items are deleted (S2 keeps them),
-      // so until then this sample is approvals only.
-      const rows = await db.proofItem.findMany({
-        where: { status: "verified", reviewedAt: { not: null } },
-        select: { createdAt: true, reviewedAt: true },
-        orderBy: { reviewedAt: "desc" },
-        take: RESOLVED_SAMPLE,
-      });
-      return rows.map((r) => r.reviewedAt.getTime() - r.createdAt.getTime());
-    },
-  },
-  {
     key: "identity",
     label: "Identity checks",
     capability: "checker",

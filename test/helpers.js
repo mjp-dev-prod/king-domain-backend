@@ -477,4 +477,19 @@ const call = async (base, tok, method, p, body) => {
   return { status: r.status, json: await r.json().catch(() => null) };
 };
 
-module.exports = { serveFakeSlack, ensureAdmin, adminTokenFor, prisma, CATEGORY, TITLE_PREFIX, past, future, fakeProvider, serveFakeProvider, scopedPrisma, barrierPrisma, spyMailer, serveFakeStorage, serveFakeR2, ensureUser, fixtures, seedAward, seedWorking, seedSubmitted, DAY_MS, tokenFor, startServer, call };
+/**
+ * A talent verified in a skill: a verified submission with one piece to show. This is what lets someone apply since the
+ * old proof-of-work flow was retired (2026-11-09). Returns the submission and the piece's id.
+ */
+async function verifyTalentInSkill(user, skillKey = "graphic-design") {
+  await prisma.skillSubmission.deleteMany({ where: { userId: user.id, skillKey } });
+  const submission = await prisma.skillSubmission.create({ data: { userId: user.id, skillKey, status: "verified", submittedAt: past(48), authenticityAt: past(40), decidedAt: past(24) } });
+  const piece = await prisma.submissionPiece.create({ data: { submissionId: submission.id, position: 1, title: "Suite piece", brief: "A piece used by the test suite", role: "Designer", madeOn: "Figma" } });
+  return { submission, pieceId: piece.id };
+}
+
+/** The body an application to a job with a skill needs: an answer and the verified piece to show. */
+const applyBody = (pieceId, over = {}) => ({ answer: "I have done this kind of work before and can start right away.", pieces: [{ type: "piece", id: pieceId }], ...over });
+
+module.exports = {
+    verifyTalentInSkill, applyBody, serveFakeSlack, ensureAdmin, adminTokenFor, prisma, CATEGORY, TITLE_PREFIX, past, future, fakeProvider, serveFakeProvider, scopedPrisma, barrierPrisma, spyMailer, serveFakeStorage, serveFakeR2, ensureUser, fixtures, seedAward, seedWorking, seedSubmitted, DAY_MS, tokenFor, startServer, call };

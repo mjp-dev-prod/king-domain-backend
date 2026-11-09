@@ -82,16 +82,12 @@ describe("request-changes route", () => {
 });
 
 describe("applicant signals (correction-talent-discovery-screen.md)", () => {
-  it("the client sees verified proof in the job's category only, and a plain completed-jobs count", async () => {
-    const profileA = await prisma.talentProfile.findUnique({ where: { userId: ctx.talentA.id } });
-    await prisma.proofItem.deleteMany({ where: { talentProfileId: profileA.id } });
-    await prisma.proofItem.createMany({
-      data: [
-        { talentProfileId: profileA.id, category: h.CATEGORY, title: "Verified in category", status: "verified" },
-        { talentProfileId: profileA.id, category: h.CATEGORY, title: "Still in review", status: "pending" },
-        { talentProfileId: profileA.id, category: "Software & tech", title: "Other category", status: "verified" },
-      ],
-    });
+  it("the client sees verified skills in the job's category only, and a plain completed-jobs count", async () => {
+    // Talent A is verified in Graphic design (category Design & creative) and only in review in Web development
+    // (Software & tech): only the first counts for a Design & creative job.
+    await h.verifyTalentInSkill(ctx.talentA, "graphic-design");
+    await prisma.skillSubmission.deleteMany({ where: { userId: ctx.talentA.id, skillKey: "web-development" } });
+    await prisma.skillSubmission.create({ data: { userId: ctx.talentA.id, skillKey: "web-development", status: "review", submittedAt: new Date(), authenticityAt: new Date() } });
     // One job talent A already completed.
     await h.seedSubmitted(ctx, { contract: { status: "approved" } });
 
@@ -104,12 +100,12 @@ describe("applicant signals (correction-talent-discovery-screen.md)", () => {
     const [a, b] = r.json.applications;
     assert.equal(a.talent.id, ctx.talentA.id, "in the order they applied");
     assert.equal(a.signals.verifiedInCategory, true);
-    assert.deepEqual(a.signals.proof.map((p) => p.title), ["Verified in category"], "pending and other-category proof never shown");
+    assert.deepEqual(a.signals.proof, [], "the work a client weighs is the applicant panel's pieces now, not old proof items");
     assert.equal(a.signals.jobsCompleted, 1);
     assert.equal(b.signals.verifiedInCategory, false);
     assert.deepEqual(b.signals.proof, []);
     assert.equal(b.signals.jobsCompleted, 0);
 
-    await prisma.proofItem.deleteMany({ where: { talentProfileId: profileA.id } });
+    await prisma.skillSubmission.deleteMany({ where: { userId: ctx.talentA.id, skillKey: { in: ["graphic-design", "web-development"] } } });
   });
 });

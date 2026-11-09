@@ -12,7 +12,7 @@ before(async () => {
   shareholder = await h.ensureAdmin("testsuite-shareholder@example.com", { capabilities: ["shareholder"] });
   target = await h.ensureAdmin("testsuite-target@example.com");
   await prisma.onCallShift.deleteMany({ where: { adminId: { in: [owner.id, target.id] } } });
-  await prisma.queueTarget.deleteMany({ where: { queueKey: "proof" } });
+  await prisma.queueTarget.deleteMany({ where: { queueKey: "authenticity" } });
   server = await h.startServer({
     port: 4622,
     paystackUrl: "http://127.0.0.1:9",
@@ -25,7 +25,7 @@ after(async () => {
   server?.stop();
   slack.server.close();
   await prisma.onCallShift.deleteMany({ where: { adminId: { in: [owner.id, target.id] } } });
-  await prisma.queueTarget.deleteMany({ where: { queueKey: "proof" } });
+  await prisma.queueTarget.deleteMany({ where: { queueKey: "authenticity" } });
   await prisma.opsAlert.deleteMany({ where: { title: { startsWith: "Test alert from" } } });
   await prisma.adminAuditEvent.deleteMany({ where: { actorId: owner.id } });
   await prisma.$disconnect();
@@ -34,10 +34,11 @@ after(async () => {
 const api = (tok, method, p, body) => h.call(server.base, tok, method, p, body);
 
 describe("GET /admin/inbox", () => {
-  it("shows the proof queue to an owner and nothing to an admin without capabilities", async () => {
+  it("shows the first-check queue to an owner and nothing to an admin without capabilities", async () => {
     const o = await api(tOwner, "GET", "/admin/inbox");
     assert.equal(o.status, 200);
-    assert.ok(o.json.queues.some((q) => q.key === "proof" && q.path === "/proof-review"));
+    assert.ok(o.json.queues.some((q) => q.key === "authenticity" && q.path === "/authenticity"));
+    assert.ok(!o.json.queues.some((q) => q.key === "proof"), "the old proof queue is gone");
     const r = await api(tReader, "GET", "/admin/inbox");
     assert.deepEqual(r.json.queues, []);
   });
@@ -45,11 +46,11 @@ describe("GET /admin/inbox", () => {
 
 describe("PUT /admin/inbox/targets/:queueKey", () => {
   it("an owner changes a target; bad input and non-owners are refused; unknown queues are 404", async () => {
-    const ok = await api(tOwner, "PUT", "/admin/inbox/targets/proof", { targetMinutes: 2880, defaultWhenLate: "Escalate to the owner." });
+    const ok = await api(tOwner, "PUT", "/admin/inbox/targets/authenticity", { targetMinutes: 2880, defaultWhenLate: "Escalate to the owner." });
     assert.equal(ok.status, 200, JSON.stringify(ok.json));
     assert.equal(ok.json.target.targetMinutes, 2880);
-    assert.equal((await api(tOwner, "PUT", "/admin/inbox/targets/proof", { targetMinutes: 0, defaultWhenLate: "x" })).status, 400);
-    assert.equal((await api(tReader, "PUT", "/admin/inbox/targets/proof", { targetMinutes: 60, defaultWhenLate: "Escalate." })).status, 403);
+    assert.equal((await api(tOwner, "PUT", "/admin/inbox/targets/authenticity", { targetMinutes: 0, defaultWhenLate: "x" })).status, 400);
+    assert.equal((await api(tReader, "PUT", "/admin/inbox/targets/authenticity", { targetMinutes: 60, defaultWhenLate: "Escalate." })).status, 403);
     assert.equal((await api(tOwner, "PUT", "/admin/inbox/targets/nope", { targetMinutes: 60, defaultWhenLate: "Escalate." })).status, 404);
   });
 });

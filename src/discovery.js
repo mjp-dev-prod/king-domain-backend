@@ -21,18 +21,12 @@ function decodeCursor(c) {
   }
 }
 
-/** The skills a person is verified in, with when each was first verified. S2 submissions, plus older proof items by category. */
+/** The skills a person is verified in, with when each was first verified: verified skill submissions. */
 async function verifiedSkills(prisma, userId) {
   const subs = await prisma.skillSubmission.findMany({ where: { userId, status: "verified" }, select: { skillKey: true, decidedAt: true }, orderBy: { decidedAt: "asc" } });
   const out = new Map();
   for (const s of subs) if (!out.has(s.skillKey)) out.set(s.skillKey, s.decidedAt);
   return [...out.entries()].map(([skillKey, at]) => ({ skillKey, label: skillByKey(skillKey)?.label ?? skillKey, verifiedAt: at }));
-}
-
-/** Older (pre-S2) verified proof items, as category labels. */
-async function legacyVerifiedCategories(prisma, userId) {
-  const rows = await prisma.proofItem.findMany({ where: { status: "verified", talentProfile: { userId } }, select: { category: true } });
-  return [...new Set(rows.map((r) => r.category))];
 }
 
 // ── Jobs: the feed ───────────────────────────────────────
@@ -135,8 +129,8 @@ async function feedJobs(viewer, query, deps = {}) {
 
   let matchWhere = null;
   if (query.forYou === "true" && viewer.role === "talent") {
-    const [skills, categories] = await Promise.all([verifiedSkills(prisma, viewer.id), legacyVerifiedCategories(prisma, viewer.id)]);
-    matchWhere = { OR: [{ skillKey: { in: skills.map((s) => s.skillKey) } }, { skillKey: null, category: { in: categories } }] };
+    const skills = await verifiedSkills(prisma, viewer.id);
+    matchWhere = { skillKey: { in: skills.map((s) => s.skillKey) } };
   }
 
   const cards = [];
@@ -400,7 +394,6 @@ module.exports = {
   attachOpenCounts,
   PAGE_DEFAULT,
   verifiedSkills,
-  legacyVerifiedCategories,
   feedJobs,
   cardOf,
   jobCardInclude,
@@ -436,9 +429,7 @@ async function applicantPanel(application, job, deps = {}) {
         if (!p) return null;
         return { type: "piece", id: p.id, title: p.title, brief: p.brief, role: p.role, madeOn: p.madeOn, liveLink: p.liveLink || null, files: await Promise.all(p.files.slice(0, 3).map(async (f) => ({ name: f.name, contentType: f.contentType, url: storage.privateUploadsConfigured ? await storage.presignPrivateGet(f.objectKey, 300) : null }))) };
       }
-      const proof = await prisma.proofItem.findUnique({ where: { id: c.id } });
-      if (!proof) return null;
-      return { type: "proof", id: proof.id, title: proof.title, brief: "", role: "", madeOn: "", liveLink: null, files: proof.filePath ? [{ name: proof.title, contentType: "application/octet-stream", url: await storage.getProofFileSignedUrl(proof.filePath) }] : [] };
+      return null;
     }),
   );
   const questions = Array.isArray(job.screeningQuestions) ? job.screeningQuestions : [];

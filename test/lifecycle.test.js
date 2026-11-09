@@ -258,14 +258,13 @@ describe("HTTP routes (real server, real paystack.js client, fake Paystack over 
     const ct = await h.tokenFor(ctx.client);
     const tt = await h.tokenFor(ctx.talentA);
     const job = (await h.call(server.base, ct, "POST", "/jobs", { title: `${h.TITLE_PREFIX}http`, category: h.CATEGORY, description: "suite", budget: 2000, deliveryDays: 7 })).json.job;
-    const talentProfile = await prisma.talentProfile.findUnique({ where: { userId: ctx.talentA.id } });
-    await prisma.proofItem.upsert({
-      where: { id: "00000000-0000-4000-8000-000000000001" },
-      update: { talentProfileId: talentProfile.id, category: h.CATEGORY, status: "verified" },
-      create: { id: "00000000-0000-4000-8000-000000000001", talentProfileId: talentProfile.id, category: h.CATEGORY, title: "Verified sample", status: "verified" },
-    });
-    const applied = await h.call(server.base, tt, "POST", `/jobs/${job.id}/apply`);
+    const { pieceId } = await h.verifyTalentInSkill(ctx.talentA);
+    await prisma.job.update({ where: { id: job.id }, data: { skillKey: "graphic-design" } });
+    const applied = await h.call(server.base, tt, "POST", `/jobs/${job.id}/apply`, h.applyBody(pieceId));
     assert.equal(applied.status, 201, JSON.stringify(applied.json));
+    // This test is about payment timing, not the skill rules: with a skill the job would also need a start proof before
+    // delivery, so it goes back to a plain job now that the application is in.
+    await prisma.job.update({ where: { id: job.id }, data: { skillKey: null } });
     const apps = (await h.call(server.base, ct, "GET", `/jobs/${job.id}/applications`)).json.applications;
     const t0 = Date.now();
     const award = await h.call(server.base, ct, "POST", `/jobs/${job.id}/applications/${apps[0].id}/award`);

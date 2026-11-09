@@ -3,7 +3,9 @@ const { singleFile, checkUpload } = require("../uploads");
 const crypto = require("node:crypto");
 const { prisma } = require("../db");
 const { requireUser, requireTalentProfile } = require("./routes");
-const { uploadDeliverableFile, getDeliverableFileSignedUrl, getProofFileSignedUrl, avatarPublicUrl } = require("../storage");
+const { uploadDeliverableFile, getDeliverableFileSignedUrl, avatarPublicUrl } = require("../storage");
+const { SKILLS } = require("../skills");
+const submissions = require("../submissions");
 const paystack = require("../paystack");
 const { confirmFunding } = require("../contractFunding");
 const lifecycle = require("../contractLifecycle");
@@ -101,7 +103,9 @@ function serializeApplication(app) {
  */
 async function applicantSignals(talent, category) {
   const profile = talent?.talentProfile;
-  const verifiedProof = (profile?.proofItems ?? []).filter((p) => p.category === category && p.status === "verified");
+  // Verified in this job's category means verified in a skill whose work falls in it (a verified submission).
+  const skillKeys = SKILLS.filter((s) => submissions.categoryLabel(s) === category).map((s) => s.key);
+  const verifiedHere = talent && skillKeys.length ? await prisma.skillSubmission.count({ where: { userId: talent.id, skillKey: { in: skillKeys }, status: "verified" } }) : 0;
   const jobsCompleted = talent
     ? await prisma.contract.count({
         where: { status: "approved", job: { applications: { some: { talentId: talent.id, status: "selected" } } } },
@@ -109,14 +113,9 @@ async function applicantSignals(talent, category) {
     : 0;
   return {
     headline: profile?.headline || null,
-    verifiedInCategory: verifiedProof.length > 0,
-    proof: await Promise.all(
-      verifiedProof.slice(0, 3).map(async (p) => ({
-        id: p.id,
-        title: p.title,
-        fileUrl: p.filePath ? await getProofFileSignedUrl(p.filePath) : null,
-      })),
-    ),
+    verifiedInCategory: verifiedHere > 0,
+    // The work a client weighs is shown in the full applicant panel (the pieces the talent chose), not here.
+    proof: [],
     jobsCompleted,
   };
 }
@@ -267,16 +266,12 @@ router.post("/:id/apply", requireTalentProfile, requireVerifiedIdentity(), async
   const job = await prisma.job.findUnique({ where: { id: req.params.id } });
   if (!job) return res.status(404).json({ error: "Job not found." });
 
-  // A job with a skill needs Verified in THAT skill (a verified submission, or an older proof item of its own).
-  // The older category check stays for jobs posted before skills.
-  let verifiedHere;
-  if (job.skillKey) {
-    verifiedHere =
-      (await prisma.skillSubmission.findFirst({ where: { userId: req.user.id, skillKey: job.skillKey, status: "verified" } })) ||
-      (await prisma.proofItem.findFirst({ where: { talentProfileId: req.talentProfile.id, category: job.category, status: "verified", NOT: { title: { endsWith: "(verified)" } } } }));
-  } else {
-    verifiedHere = await prisma.proofItem.findFirst({ where: { talentProfileId: req.talentProfile.id, category: job.category, status: "verified" } });
+  // A job needs Verified in ITS skill: a verified submission. The old proof-of-work flow was retired on 2026-11-09, so a
+  // job from before skills (no skill) cannot take applications.
+  if (!job.skillKey) {
+    return res.status(403).json({ error: "This job was posted before jobs asked for a skill, so it can't take applications.", code: "no_skill" });
   }
+  const verifiedHere = await prisma.skillSubmission.findFirst({ where: { userId: req.user.id, skillKey: job.skillKey, status: "verified" } });
   if (!verifiedHere) {
     return res.status(403).json({ error: job.skillKey ? `You need to be verified in ${skillByKey(job.skillKey)?.label ?? job.category} to apply.` : `You need Verified status in ${job.category} to apply.`, code: "not_verified_in_skill" });
   }
@@ -311,7 +306,7 @@ router.get("/:id/applications", requireClient, async (req, res) => {
   const applications = await prisma.application.findMany({
     where: { jobId: job.id },
     orderBy: { createdAt: "asc" },
-    include: { talent: { include: { talentProfile: { include: { proofItems: true } } } } },
+    include: { talent: { include: { talentProfile: true } } },
   });
   const signals = await Promise.all(applications.map((a) => applicantSignals(a.talent, job.category)));
   const count = job.reopenedAt ? applications.filter((a) => a.createdAt >= job.reopenedAt).length : applications.length;

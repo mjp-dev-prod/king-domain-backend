@@ -15,7 +15,7 @@ function defaults(deps = {}) {
     fetchImpl: deps.fetchImpl ?? fetch,
     mailer: deps.mailer ?? mailer,
     webhookUrl: deps.webhookUrl ?? process.env.OPS_SLACK_WEBHOOK_URL ?? "",
-    dashboardUrl: deps.dashboardUrl ?? process.env.ADMIN_DASHBOARD_URL ?? "",
+    dashboardUrl: deps.dashboardUrl ?? process.env.ADMIN_DASHBOARD_URL ?? process.env.ADMIN_APP_URL ?? "",
     now: deps.now ?? new Date(),
   };
 }
@@ -41,7 +41,11 @@ async function postSlack(d, text) {
 
 const fullLink = (d, link) => (link ? `${d.dashboardUrl}${link}` : null);
 
-async function raiseAlert(db, { severity, queueKey, title, body, link = null }, deps) {
+/**
+ * `to` names who gets the email (the people who can do this work); without it an urgent alert goes to whoever is on
+ * call, or to the owners when nobody is.
+ */
+async function raiseAlert(db, { severity, queueKey, title, body, link = null, to = null }, deps) {
   if (!SEVERITIES.includes(severity)) throw new Error(`Unknown alert severity "${severity}".`);
   const d = defaults(deps);
   const row = await db.opsAlert.create({ data: { severity, queueKey, title, body, link } });
@@ -53,8 +57,8 @@ async function raiseAlert(db, { severity, queueKey, title, body, link = null }, 
   const url = fullLink(d, link);
   const slackSent = await postSlack(d, `:rotating_light: *${title}*\n${body}${url ? `\n${url}` : ""}`);
 
-  let recipients = await onCallNow(db, d.now);
-  const reason = recipients.length ? "on-call" : "no-one-on-call:owners";
+  let recipients = to?.length ? to : await onCallNow(db, d.now);
+  const reason = to?.length ? "named" : recipients.length ? "on-call" : "no-one-on-call:owners";
   if (!recipients.length) recipients = await db.adminUser.findMany({ where: { role: "owner", status: "active" } });
   const emailedTo = [];
   for (const admin of recipients) {
@@ -117,6 +121,7 @@ function startOpsScheduler({ intervalMs = 15 * 60 * 1000 } = {}) {
   const tick = async () => {
     try {
       await sweepOverdue(defaultDb);
+      await require("./skillNotices").sweepWaiting(defaultDb);
       if (lagosHour(new Date()) === DIGEST_HOUR_LAGOS) await sendDigest(defaultDb);
     } catch (err) {
       console.error("alerts: ops tick failed:", err);
