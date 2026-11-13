@@ -48,6 +48,53 @@ async function filesWithLinks(files) {
   );
 }
 
+// ── Previews on queue rows ───────────────────────────────
+
+/** What a queue row needs to preview the work: the first piece, with its finished files. Used with `include`. */
+const previewInclude = {
+  pieces: {
+    orderBy: { position: "asc" },
+    take: 1,
+    include: { files: { where: { role: "output", status: "ready" }, orderBy: { createdAt: "asc" } } },
+  },
+};
+
+const previewKind = (contentType) => (contentType?.startsWith("image/") ? "image" : contentType?.startsWith("video/") ? "video" : "document");
+
+/** The host of a web link, and nothing else of it: a path or query can carry a private title or a token. Null for anything that isn't http(s). */
+function linkHost(raw) {
+  try {
+    const u = new URL(raw);
+    return u.protocol === "http:" || u.protocol === "https:" ? u.hostname : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A small preview of a submission's work, or null when there is nothing to show: { kind, name, pieceTitle, url }.
+ * It is the earliest finished file of the first piece, with a short-lived link to it (the link is null when private storage
+ * isn't set up). A piece with no finished file but a live link shows the link's host, and no url. `s` must have been loaded
+ * with previewInclude. A file is only used if it belongs to this submission, so a row can never show someone else's work.
+ */
+async function previewOf(s) {
+  const piece = s.pieces[0];
+  if (!piece) return null;
+  const file = piece.files.find((f) => f.submissionId === s.id);
+  if (file) {
+    let url = null;
+    try {
+      [{ url }] = await filesWithLinks([file]);
+    } catch (err) {
+      // A preview is decoration: a signing problem must not take the whole queue down. Say which row and why.
+      console.error(`skillReviewRoutes: no preview link for submission=${s.id} file=${file.id}:`, err.message);
+    }
+    return { kind: previewKind(file.contentType), name: file.name, pieceTitle: piece.title, url };
+  }
+  const host = linkHost(piece.liveLink);
+  return host ? { kind: "link", name: host, pieceTitle: piece.title, url: null } : null;
+}
+
 async function workOf(s) {
   const files = await filesWithLinks(s.files.filter((f) => f.status === "ready"));
   return {
@@ -60,9 +107,11 @@ async function workOf(s) {
 // ── Authenticity ─────────────────────────────────────────
 
 authenticityRouter.get("/", async (req, res) => {
-  const rows = await prisma.skillSubmission.findMany({ where: { status: "authenticity" }, orderBy: { submittedAt: "asc" }, take: 100, include: withPerson });
+  const rows = await prisma.skillSubmission.findMany({ where: { status: "authenticity" }, orderBy: { submittedAt: "asc" }, take: 100, include: { ...withPerson, ...previewInclude } });
   res.json({
-    submissions: rows.map((s) => ({ id: s.id, skillKey: s.skillKey, skillLabel: skillByKey(s.skillKey)?.label ?? s.skillKey, submittedAt: s.submittedAt, repeatOfRejected: s.repeatOfRejected, person: { name: s.user.fullName } })),
+    submissions: await Promise.all(
+      rows.map(async (s) => ({ id: s.id, skillKey: s.skillKey, skillLabel: skillByKey(s.skillKey)?.label ?? s.skillKey, submittedAt: s.submittedAt, repeatOfRejected: s.repeatOfRejected, person: { name: s.user.fullName }, preview: await previewOf(s) })),
+    ),
   });
 });
 
@@ -198,10 +247,12 @@ reviewRouter.get("/", async (req, res) => {
     where: { status: "review", skillKey: { in: mine }, reviews: { none: { reviewerId: req.admin.id } } },
     orderBy: { authenticityAt: "asc" },
     take: 100,
-    include: { reviews: { select: { id: true } }, pieces: { select: { id: true } } },
+    include: { reviews: { select: { id: true } }, _count: { select: { pieces: true } }, ...previewInclude },
   });
   res.json({
-    submissions: rows.map((s) => ({ id: s.id, skillKey: s.skillKey, skillLabel: skillByKey(s.skillKey)?.label ?? s.skillKey, waitingSince: s.authenticityAt, reviewsSoFar: s.reviews.length, pieces: s.pieces.length, thirdOpinion: s.reviews.length >= 2 })),
+    submissions: await Promise.all(
+      rows.map(async (s) => ({ id: s.id, skillKey: s.skillKey, skillLabel: skillByKey(s.skillKey)?.label ?? s.skillKey, waitingSince: s.authenticityAt, reviewsSoFar: s.reviews.length, pieces: s._count.pieces, thirdOpinion: s.reviews.length >= 2, preview: await previewOf(s) })),
+    ),
   });
 });
 
